@@ -1,12 +1,12 @@
 use crate::screens::screen::{GlobalAction, Screen};
+use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::macros::vertical;
-use ratatui::widgets::Block;
-use std::ops::Rem;
-use tui_input::Input;
+use ratatui::prelude::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Padding, Paragraph};
 
 #[derive(Default)]
 pub struct LoginScreen {
@@ -75,23 +75,42 @@ impl Screen for LoginScreen {
     }
 
     fn render(&self, frame: &mut Frame) {
+        let theme = get_app_theme();
+
         let content_area = frame
             .area()
-            .centered(Constraint::Min(1), Constraint::Min(1));
+            .centered(Constraint::Max(50), Constraint::Length(14));
+        let [dialog, hint] = content_area.layout(&Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ]));
 
-        let block = Block::bordered().title("Login");
-        let inner_area = block.inner(content_area);
+        let block = Block::default()
+            .style(Style::default().bg(theme.bg))
+            .padding(Padding::uniform(1));
+        let inner_area = block.inner(dialog);
 
-        let chunks = Layout::vertical([
+        let [title, url, username, password] = inner_area.layout(&Layout::vertical([
+            Constraint::Length(2),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
-        ])
-        .split(inner_area);
+        ]));
 
-        frame.render_widget(block, content_area);
-        frame.render_widget(Control::new(&self.url).label("URL"), chunks[0]);
-        frame.render_widget(Control::new(&self.username).label("Username"), chunks[1]);
-        frame.render_widget(Control::new(&self.password).label("Password"), chunks[2]);
+        frame.render_widget(block, dialog);
+        frame.render_widget(Paragraph::new("API configuration").centered(), title);
+        frame.render_widget(Control::new(&self.url).label("URL"), url);
+        frame.render_widget(Control::new(&self.username).label("Username"), username);
+        frame.render_widget(Control::new(&self.password).label("Password"), password);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("↑↓", Style::default().fg(theme.fg_active)),
+                " Change focus  ".into(),
+                Span::styled("Enter", Style::default().fg(theme.fg_active)),
+                " Submit".into(),
+            ]))
+            .block(Block::default().padding(Padding::horizontal(1))),
+            hint,
+        );
     }
 }

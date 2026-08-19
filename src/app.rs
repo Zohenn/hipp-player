@@ -1,14 +1,13 @@
 use crate::open_subsonic::OpenSubsonicClient;
-use crate::screens::initial::InitScreen;
 use crate::screens::login::LoginScreen;
 use crate::screens::screen::{GlobalAction, Screen};
-use crate::theme::Theme;
+use crate::theme::{Theme, get_app_theme};
 use crate::ui::control::{ControlStyle, set_default_style};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::Block;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +26,6 @@ impl Default for App {
             theme: Default::default(),
             should_quit: false,
             api_client: None,
-            // active_screen: Box::new(InitScreen {}),
             active_screen: Box::new(LoginScreen::new()),
         }
     }
@@ -41,17 +39,21 @@ impl App {
         let mut interval = tokio::time::interval(frame_time);
         let mut events = EventStream::new();
 
+        let theme = get_app_theme();
+
         set_default_style(
             ControlStyle::default()
-                .focused(self.theme.fg_active)
-                .unfocused(self.theme.fg),
+                .bg(theme.bg)
+                .bg_darker(theme.bg_darker)
+                .focused(theme.fg_active)
+                .unfocused(theme.fg),
         );
 
         while !self.should_quit {
             tokio::select! {
                 _ = interval.tick() => {
                     terminal.draw(|frame| {
-                        frame.render_widget(Block::default().style(Style::default().bg(Color::Rgb(40, 42, 54))), frame.area());
+                        frame.render_widget(Block::default().style(Style::default().bg(theme.bg_darker)), frame.area());
                         self.active_screen.render(frame);
                     })?;
                 },

@@ -1,21 +1,35 @@
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{Event, KeyCode};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{StatefulWidget, Widget};
-use ratatui::style::{Color, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::prelude::Widget;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use std::sync::RwLock;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct ControlStyle {
+    bg: Option<Color>,
+    bg_darker: Option<Color>,
     unfocused: Option<Color>,
     focused: Option<Color>,
 }
 
 impl ControlStyle {
+    pub fn bg(mut self, color: Color) -> Self {
+        self.bg = Some(color);
+
+        self
+    }
+
+    pub fn bg_darker(mut self, color: Color) -> Self {
+        self.bg_darker = Some(color);
+
+        self
+    }
+
     pub fn unfocused(mut self, unfocused: Color) -> Self {
         self.unfocused = Some(unfocused);
 
@@ -30,14 +44,15 @@ impl ControlStyle {
 }
 
 static DEFAULT_STYLE: RwLock<ControlStyle> = RwLock::new(ControlStyle {
+    bg: None,
+    bg_darker: None,
     unfocused: None,
     focused: None,
 });
 
 pub fn set_default_style(style: ControlStyle) {
     if let Ok(mut default_style) = DEFAULT_STYLE.write() {
-        default_style.unfocused = style.unfocused;
-        default_style.focused = style.focused;
+        *default_style = style;
     }
 }
 
@@ -109,18 +124,18 @@ impl From<&str> for ControlState {
 
 pub struct Control<'a> {
     state: &'a ControlState,
-    label: Line<'a>,
+    label: Span<'a>,
 }
 
 impl<'a> Control<'a> {
     pub fn new(state: &'a ControlState) -> Control<'a> {
         Self {
             state,
-            label: Line::default(),
+            label: Span::default(),
         }
     }
 
-    pub fn label(mut self, label: impl Into<Line<'a>>) -> Self {
+    pub fn label(mut self, label: impl Into<Span<'a>>) -> Self {
         self.label = label.into();
 
         self
@@ -133,6 +148,8 @@ impl Widget for Control<'_> {
         Self: Sized,
     {
         let default_style = DEFAULT_STYLE.read().unwrap();
+        let bg_color = default_style.bg.unwrap_or(Color::Black);
+        let bg_darker_color = default_style.bg_darker.unwrap_or(Color::Black);
         let focused_color = default_style.focused.unwrap_or(Color::Cyan);
 
         let width = area.width.max(3) - 3;
@@ -144,10 +161,26 @@ impl Widget for Control<'_> {
                 .unwrap_or(Style::default()),
             ControlMode::Focused => focused_color.into(),
         };
+
+        let input_style = input_style.bg(bg_darker_color);
+        let focused_style = input_style.fg(focused_color);
+
+        let title_style = match self.state.mode {
+            ControlMode::Normal => input_style,
+            ControlMode::Focused => focused_style.add_modifier(Modifier::BOLD),
+        };
+
         let input = Paragraph::new(self.state.input.value())
             .style(input_style)
             .scroll((0, scroll as u16))
-            .block(Block::bordered().title(self.label));
+            .block(
+                Block::bordered()
+                    .style(Style::default().bg(bg_color))
+                    .border_type(BorderType::QuadrantInside)
+                    .border_style(Style::default().fg(input_style.bg.unwrap()))
+                    .title_style(title_style)
+                    .title_top(Line::from([" ", &self.label.content, " "].as_slice())),
+            );
 
         input.render(area, buf);
 
@@ -155,31 +188,8 @@ impl Widget for Control<'_> {
             let text_x = self.state.input.visual_cursor().max(scroll) - scroll;
             let x = text_x + 1;
             Line::from(self.state.input.value().get(text_x..=text_x).unwrap_or(" "))
-                .style(Style::default().bg(focused_color).fg(Color::Black))
+                .style(focused_style.add_modifier(Modifier::UNDERLINED))
                 .render(Rect::new(area.x + x as u16, area.y + 1, 1, 1), buf);
         }
     }
 }
-
-// impl StatefulWidget for Control {
-//     type State = ControlState;
-//
-//     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-//         let width = area.width.max(3) - 3;
-//         let scroll = state.input.visual_scroll(width as usize);
-//         let style = match state.mode {
-//             ControlMode::Normal => Style::default(),
-//             ControlMode::Focused => Color::Yellow.into(),
-//         };
-//         let input = Paragraph::new(state.input.value())
-//             .style(style)
-//             .scroll((0, scroll as u16))
-//             .block(Block::bordered().title("Input"));
-//
-//         input.render(area, buf);
-//
-//         if state.mode == ControlMode::Focused {
-//             let x = state.input.visual_cursor().max(scroll) - scroll + 1;
-//         }
-//     }
-// }

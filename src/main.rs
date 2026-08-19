@@ -2,6 +2,7 @@ use crate::app::App;
 use color_eyre::Result;
 
 mod app;
+pub mod domain;
 mod open_subsonic;
 pub mod screens;
 pub mod theme;

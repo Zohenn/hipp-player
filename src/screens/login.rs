@@ -1,4 +1,6 @@
-use crate::screens::screen::{GlobalAction, Screen};
+use crate::domain::AppEvent;
+use crate::domain::login::{LoginAction, LoginEvent, LoginParams};
+use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
 use crossterm::event::{Event, KeyCode};
@@ -13,6 +15,15 @@ pub struct LoginScreen {
     url: ControlState,
     username: ControlState,
     password: ControlState,
+    login_state: LoginState,
+}
+
+#[derive(Default)]
+enum LoginState {
+    #[default]
+    Idle,
+    Loading,
+    Error,
 }
 
 impl LoginScreen {
@@ -48,7 +59,7 @@ impl LoginScreen {
 }
 
 impl Screen for LoginScreen {
-    fn handle_event(&mut self, event: Event) -> Option<GlobalAction> {
+    fn handle_input_event(&mut self, event: Event) -> Option<Action> {
         if let Some(key) = event.as_key_press_event() {
             match key.code {
                 KeyCode::Up => {
@@ -61,6 +72,15 @@ impl Screen for LoginScreen {
 
                     return None;
                 }
+                KeyCode::Enter => {
+                    self.login_state = LoginState::Loading;
+
+                    return Some(Action::Login(LoginAction::Login(LoginParams {
+                        url: self.url.value().to_owned(),
+                        username: self.username.value().to_owned(),
+                        password: self.password.value().to_owned(),
+                    })));
+                }
                 _ => {}
             }
         }
@@ -72,6 +92,15 @@ impl Screen for LoginScreen {
         }
 
         None
+    }
+
+    fn handle_async_event(&mut self, event: AppEvent) {
+        if let AppEvent::Login(LoginEvent::LoginResult(result)) = event {
+            self.login_state = match result {
+                Ok(_) => LoginState::Idle,
+                Err(_) => LoginState::Error,
+            }
+        }
     }
 
     fn render(&self, frame: &mut Frame) {

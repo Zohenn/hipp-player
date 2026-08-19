@@ -88,6 +88,10 @@ impl ControlState {
         self.mode = ControlMode::Normal;
     }
 
+    pub fn value(&self) -> &str {
+        self.input.value()
+    }
+
     pub fn handle_input(&mut self, event: &Event) {
         if self.mode != ControlMode::Focused {
             return;

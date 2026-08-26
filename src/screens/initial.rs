@@ -13,7 +13,7 @@ impl Screen for InitScreen {
         Some(Action::SwitchScreen(Box::new(LoginScreen::new())))
     }
 
-    fn handle_async_event(&mut self, event: AppEvent) {
+    fn handle_async_event(&mut self, event: &AppEvent) {
         todo!()
     }
 

@@ -17,3 +17,11 @@ serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.19"
 tui-input = "0.15.4"
+log = "0.4.33"
+dirs = "6.0.0"
+rusqlite = { version = "0.40.2", features = ["chrono", "bundled"] }
+keyring = "4.1.6"
+aes-gcm = "0.11.1"
+serde_rusqlite = "0.43.0"
+chrono = { version = "0.4.45", features = ["serde"] }
+hex = "0.4.3"

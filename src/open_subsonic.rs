@@ -3,6 +3,7 @@ use reqwest::RequestBuilder;
 use reqwest::Result;
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct OpenSubsonicOptions {
     pub url: String,
     pub username: String,
@@ -27,6 +28,7 @@ impl OpenSubsonicClient {
         format!("{}/{}", self.options.url, url)
     }
 
+    // TODO: the result of this method will never change, no point in creating a new hash map for each request
     fn base_query(&self) -> HashMap<&str, String> {
         let mut salt = [0u8; 8];
         rand::rng().fill_bytes(&mut salt);

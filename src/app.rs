@@ -5,12 +5,14 @@ use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
 use crate::ui::control::{ControlStyle, set_default_style};
+use crate::ui::overlay::{AppOverlay, Overlay};
 use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use log::log;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
 use ratatui::style::Style;
-use ratatui::widgets::Block;
+use ratatui::widgets::{Block, Paragraph};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -21,18 +23,23 @@ pub struct App {
     event_rx: UnboundedReceiver<AppEvent>,
     service_container: ServiceContainer,
     active_screen: Box<dyn Screen>,
+    overlay: Option<AppOverlay>,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl App {
+    pub fn new() -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<AppEvent>();
 
-        Self {
-            should_quit: false,
-            event_rx,
-            service_container: ServiceContainer::new(event_tx),
-            active_screen: Box::new(LoginScreen::new()),
-        }
+        Ok(
+            Self {
+                should_quit: false,
+                event_rx,
+                service_container: ServiceContainer::new(event_tx)?,
+                active_screen: Box::new(LoginScreen::new()),
+                // overlay: None,
+                overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
+            }
+        )
     }
 }
 
@@ -60,6 +67,10 @@ impl App {
                     terminal.draw(|frame| {
                         frame.render_widget(Block::default().style(Style::default().bg(theme.bg_darker)), frame.area());
                         self.active_screen.render(frame);
+
+                        if let Some(overlay) = &self.overlay {
+                            frame.render_widget(Overlay::new(overlay), frame.area());
+                        }
                     })?;
                 },
                 Some(event) = self.event_rx.recv() => self.handle_async_event(event),
@@ -71,14 +82,17 @@ impl App {
     }
 
     fn handle_async_event(&mut self, event: AppEvent) {
+        self.active_screen.handle_async_event(&event);
+
         match event {
-            AppEvent::Login(event) => {
-                match event {
-                    LoginEvent::LoginResult(result) => {
-                        // todo: handle
+            AppEvent::Login(event) => match event {
+                LoginEvent::LoginResult(result) => match result {
+                    Ok(login_result) => {
+                        self.service_container.client = login_result.client;
                     }
-                }
-            }
+                    Err(err) => self.overlay = Some(AppOverlay::loading(Some(err.to_string()))),
+                },
+            },
         }
     }
 
@@ -92,9 +106,23 @@ impl App {
             }
         }
 
+        match &self.overlay {
+            Some(overlay) => {
+                if matches!(overlay, AppOverlay::Error(_)) {
+                    if let Some(key) = event.as_key_press_event() {
+                        self.overlay = None;
+                    }
+                }
+
+                return;
+            }
+            _ => {}
+        }
+
         if let Some(action) = self.active_screen.handle_input_event(event) {
             match action {
                 Action::Login(login_action) => {
+                    self.overlay = Some(AppOverlay::loading(None));
                     self.service_container.login.handle_action(login_action)
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,

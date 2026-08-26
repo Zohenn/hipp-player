@@ -1,5 +1,5 @@
 use crate::domain::AppEvent;
-use crate::domain::login::{LoginAction, LoginEvent, LoginParams};
+use crate::domain::login::{LoginAction, LoginParams};
 use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
@@ -15,22 +15,15 @@ pub struct LoginScreen {
     url: ControlState,
     username: ControlState,
     password: ControlState,
-    login_state: LoginState,
-}
-
-#[derive(Default)]
-enum LoginState {
-    #[default]
-    Idle,
-    Loading,
-    Error,
 }
 
 impl LoginScreen {
     pub fn new() -> Self {
         Self {
             url: "https://bandcamp.com/api/subsonic".into(),
-            username: ControlState::auto_focused(),
+            // username: ControlState::auto_focused(),
+            username: "P6NLRVILXPMV4J4DIWQCXG4HA5MJGYOY".into(),
+            password: "XH56Y5ZNWJO3MV3OB75MLDZVJ4YIT6LL".into(),
             ..Default::default()
         }
     }
@@ -73,8 +66,6 @@ impl Screen for LoginScreen {
                     return None;
                 }
                 KeyCode::Enter => {
-                    self.login_state = LoginState::Loading;
-
                     return Some(Action::Login(LoginAction::Login(LoginParams {
                         url: self.url.value().to_owned(),
                         username: self.username.value().to_owned(),
@@ -94,14 +85,7 @@ impl Screen for LoginScreen {
         None
     }
 
-    fn handle_async_event(&mut self, event: AppEvent) {
-        if let AppEvent::Login(LoginEvent::LoginResult(result)) = event {
-            self.login_state = match result {
-                Ok(_) => LoginState::Idle,
-                Err(_) => LoginState::Error,
-            }
-        }
-    }
+    fn handle_async_event(&mut self, event: &AppEvent) {}
 
     fn render(&self, frame: &mut Frame) {
         let theme = get_app_theme();
@@ -131,6 +115,17 @@ impl Screen for LoginScreen {
         frame.render_widget(Control::new(&self.url).label("URL"), url);
         frame.render_widget(Control::new(&self.username).label("Username"), username);
         frame.render_widget(Control::new(&self.password).label("Password"), password);
+
+        // match &self.login_state {
+        //     AsyncJobState::Pending => {
+        //         frame.render_widget(Paragraph::new("Loading...").centered(), status)
+        //     }
+        //     AsyncJobState::Error(err) => {
+        //         frame.render_widget(Paragraph::new(err.as_str()).centered(), status)
+        //     }
+        //     _ => {}
+        // }
+
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("↑↓", Style::default().fg(theme.fg_active)),
@@ -141,5 +136,7 @@ impl Screen for LoginScreen {
             .block(Block::default().padding(Padding::horizontal(1))),
             hint,
         );
+
+        // frame.render_widget(Overlay::new(&self.login_state), frame.area());
     }
 }

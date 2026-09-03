@@ -11,15 +11,15 @@ pub enum AppEvent {
 }
 
 pub struct ServiceContainer {
+    pub database: Database,
     pub client: OpenSubsonicClient,
     pub login: LoginService,
 }
 
 impl ServiceContainer {
-    pub fn new(event_tx: UnboundedSender<AppEvent>) -> Result<Self> {
-        let database = Database::new()?;
-
+    pub fn new(database: Database, event_tx: UnboundedSender<AppEvent>) -> Result<Self> {
         Ok(Self {
+            database: database.clone(),
             client: OpenSubsonicClient::new(OpenSubsonicOptions::default()),
             login: LoginService::new(database, event_tx),
         })

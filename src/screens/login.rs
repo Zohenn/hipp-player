@@ -35,7 +35,7 @@ impl LoginScreen {
             .iter_mut()
             .enumerate()
             .find(|input| input.1.focused())
-            .map_or(if delta < 0 { 2 } else { 0 }, |(index, _)| index);
+            .map_or(if delta < 0 { 0 } else { 2 }, |(index, _)| index);
 
         let new_index = if delta > 0 {
             (focused_index + delta as usize) % inputs.len()

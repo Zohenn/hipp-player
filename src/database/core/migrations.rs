@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS client_config (
     username VARCHAR(255) NOT NULL,
     password BLOB NOT NULL,
     nonce BLOD NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%SZ', 'now'))
 )
 ",
             (),

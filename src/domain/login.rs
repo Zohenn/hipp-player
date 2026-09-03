@@ -1,5 +1,5 @@
+use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::database::Database;
-use crate::database::user::UserRepository;
 use crate::domain::AppEvent;
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions, PingResponse};
 use color_eyre::Result;
@@ -45,12 +45,11 @@ impl LoginService {
         let db = self.database.clone();
 
         tokio::spawn(async move {
-            let client = OpenSubsonicClient::new(OpenSubsonicOptions {
-                url: login_params.url.clone(),
-                username: login_params.username.clone(),
-                password: login_params.password.clone(),
-                api_version: "1.16.1".to_owned(),
-            });
+            let client = OpenSubsonicClient::new(OpenSubsonicOptions::new(
+                login_params.url.clone(),
+                login_params.username.clone(),
+                login_params.password.clone(),
+            ));
 
             let result = client
                 .ping()
@@ -59,7 +58,7 @@ impl LoginService {
 
             let to_send = match result {
                 Ok(result) => {
-                    let insert_result = UserRepository::new(db).insert(
+                    let insert_result = ClientConfigRepository::new(db).insert(
                         &login_params.url,
                         &login_params.username,
                         &login_params.password,

@@ -1,6 +1,11 @@
+use crate::database::client_config::ClientConfigRepository;
+use crate::database::core::database::Database;
+use crate::database::core::migration::migrate;
 use crate::domain::login::LoginEvent;
 use crate::domain::{AppEvent, ServiceContainer};
-use crate::open_subsonic::OpenSubsonicClient;
+use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
+use crate::screens::home::HomeScreen;
+use crate::screens::initial::InitScreen;
 use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
@@ -28,18 +33,18 @@ pub struct App {
 
 impl App {
     pub fn new() -> Result<Self> {
+        let database = Database::new()?;
+        migrate(&database)?;
         let (event_tx, event_rx) = unbounded_channel::<AppEvent>();
 
-        Ok(
-            Self {
-                should_quit: false,
-                event_rx,
-                service_container: ServiceContainer::new(event_tx)?,
-                active_screen: Box::new(LoginScreen::new()),
-                // overlay: None,
-                overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
-            }
-        )
+        Ok(Self {
+            should_quit: false,
+            event_rx,
+            service_container: ServiceContainer::new(database, event_tx)?,
+            active_screen: Box::new(InitScreen {}),
+            overlay: None,
+            // overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
+        })
     }
 }
 
@@ -47,6 +52,8 @@ impl App {
     const FRAMES_PER_SECOND: f32 = 60.0;
 
     pub async fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        self.initialize()?;
+
         let frame_time = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
         let mut interval = tokio::time::interval(frame_time);
         let mut events = EventStream::new();
@@ -81,6 +88,21 @@ impl App {
         Ok(())
     }
 
+    fn initialize(&mut self) -> Result<()> {
+        let client_config =
+            ClientConfigRepository::new(self.service_container.database.clone()).get()?;
+        if let Some(client_config) = client_config {
+            self.service_container.client = OpenSubsonicClient::new(OpenSubsonicOptions::new(
+                client_config.url,
+                client_config.username,
+                client_config.password,
+            ));
+            self.active_screen = Box::new(HomeScreen {});
+        }
+
+        Ok(())
+    }
+
     fn handle_async_event(&mut self, event: AppEvent) {
         self.active_screen.handle_async_event(&event);
 
@@ -89,8 +111,10 @@ impl App {
                 LoginEvent::LoginResult(result) => match result {
                     Ok(login_result) => {
                         self.service_container.client = login_result.client;
+                        self.overlay = None;
+                        self.active_screen = Box::new(HomeScreen {});
                     }
-                    Err(err) => self.overlay = Some(AppOverlay::loading(Some(err.to_string()))),
+                    Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },
             },
         }

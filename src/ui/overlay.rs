@@ -60,6 +60,7 @@ impl<'a> Widget for Overlay<'a> {
                         .map(|s| s.as_str())
                         .unwrap_or("Loading..."),
                 )
+                .block(Block::default().padding(Padding::uniform(1)))
                 .render(view_area, buf);
             }
             AppOverlay::Error(err) => {
@@ -74,7 +75,6 @@ impl<'a> Widget for Overlay<'a> {
                     ][..],
                 ))
                 .block(Block::default().padding(Padding::uniform(1)))
-                .wrap(Wrap { trim: true })
                 .render(view_area, buf);
             }
         }

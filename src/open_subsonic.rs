@@ -1,6 +1,6 @@
 use rand::Rng;
-use reqwest::RequestBuilder;
 use reqwest::Result;
+use reqwest::{IntoUrl, RequestBuilder};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -9,6 +9,17 @@ pub struct OpenSubsonicOptions {
     pub username: String,
     pub password: String,
     pub api_version: String,
+}
+
+impl OpenSubsonicOptions {
+    pub fn new(url: String, username: String, password: String) -> Self {
+        Self {
+            url,
+            username,
+            password,
+            api_version: String::from("1.16.1"),
+        }
+    }
 }
 
 pub struct OpenSubsonicClient {
@@ -25,7 +36,7 @@ impl OpenSubsonicClient {
     }
 
     fn build_url(&self, url: &str) -> String {
-        format!("{}/{}", self.options.url, url)
+        format!("{}/rest/{}", self.options.url, url)
     }
 
     // TODO: the result of this method will never change, no point in creating a new hash map for each request
@@ -49,14 +60,12 @@ impl OpenSubsonicClient {
         ])
     }
 
-    fn get(&self) -> RequestBuilder {
-        self.client
-            .get(self.build_url("ping"))
-            .query(&self.base_query())
+    fn get<U: IntoUrl>(&self, url: U) -> RequestBuilder {
+        self.client.get(url).query(&self.base_query())
     }
 
     pub async fn ping(&self) -> Result<PingResponse> {
-        let request = self.get().build()?;
+        let request = self.get(self.build_url("ping")).build()?;
 
         let result = self
             .client

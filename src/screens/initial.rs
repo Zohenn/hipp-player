@@ -10,21 +10,19 @@ pub struct InitScreen {}
 
 impl Screen for InitScreen {
     fn handle_input_event(&mut self, event: Event) -> Option<Action> {
-        Some(Action::SwitchScreen(Box::new(LoginScreen::new())))
+        None
     }
 
-    fn handle_async_event(&mut self, event: &AppEvent) {
-        todo!()
-    }
+    fn handle_async_event(&mut self, event: &AppEvent) {}
 
     fn render(&self, frame: &mut Frame) {
-        let layout = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ]);
-        let [_, message_area, _] = frame.area().layout(&layout);
-
-        frame.render_widget(Paragraph::new("Initializing app").centered(), message_area);
+        // let layout = Layout::vertical([
+        //     Constraint::Fill(1),
+        //     Constraint::Length(1),
+        //     Constraint::Fill(1),
+        // ]);
+        // let [_, message_area, _] = frame.area().layout(&layout);
+        //
+        // frame.render_widget(Paragraph::new("Initializing app").centered(), message_area);
     }
 }

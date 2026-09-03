@@ -11,7 +11,9 @@ pub struct Database {
 impl Database {
     pub fn new() -> Result<Self> {
         let mut db_file_path = dirs::data_dir().unwrap();
-        db_file_path.push("hipp-player/data.db");
+        db_file_path.push("hipp-player");
+        std::fs::create_dir_all(&db_file_path)?;
+        db_file_path.push("data.db");
 
         Ok(Self {
             connection: Arc::new(Mutex::new(Connection::open(db_file_path)?)),

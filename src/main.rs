@@ -3,10 +3,12 @@ use color_eyre::Result;
 
 mod app;
 pub mod database;
+pub mod debug;
 pub mod domain;
 mod open_subsonic;
 pub mod screens;
 pub mod theme;
+pub mod types;
 pub mod ui;
 
 #[tokio::main]

@@ -1,6 +1,7 @@
 use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::database::Database;
 use crate::database::core::migration::migrate;
+use crate::domain::collection::CollectionEvent;
 use crate::domain::login::LoginEvent;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -20,6 +21,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Paragraph};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio_stream::StreamExt;
 
@@ -92,12 +94,14 @@ impl App {
         let client_config =
             ClientConfigRepository::new(self.service_container.database.clone()).get()?;
         if let Some(client_config) = client_config {
-            self.service_container.client = OpenSubsonicClient::new(OpenSubsonicOptions::new(
-                client_config.url,
-                client_config.username,
-                client_config.password,
-            ));
-            self.active_screen = Box::new(HomeScreen {});
+            self.service_container
+                .set_client(OpenSubsonicClient::new(OpenSubsonicOptions::new(
+                    client_config.url,
+                    client_config.username,
+                    client_config.password,
+                )));
+            self.service_container.collection.sync();
+            self.active_screen = Box::new(HomeScreen::default());
         }
 
         Ok(())
@@ -112,11 +116,12 @@ impl App {
                     Ok(login_result) => {
                         self.service_container.client = login_result.client;
                         self.overlay = None;
-                        self.active_screen = Box::new(HomeScreen {});
+                        self.active_screen = Box::new(HomeScreen::default());
                     }
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },
             },
+            _ => {}
         }
     }
 

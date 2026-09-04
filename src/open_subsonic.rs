@@ -1,9 +1,10 @@
-use rand::Rng;
+use crate::types::Seconds;
+use rand::RngExt;
 use reqwest::Result;
 use reqwest::{IntoUrl, RequestBuilder};
 use std::collections::HashMap;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct OpenSubsonicOptions {
     pub url: String,
     pub username: String,
@@ -22,6 +23,7 @@ impl OpenSubsonicOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct OpenSubsonicClient {
     options: OpenSubsonicOptions,
     client: reqwest::Client,
@@ -35,20 +37,24 @@ impl OpenSubsonicClient {
         }
     }
 
+    pub fn options(&self) -> &OpenSubsonicOptions {
+        &self.options
+    }
+
     fn build_url(&self, url: &str) -> String {
         format!("{}/rest/{}", self.options.url, url)
     }
 
     // TODO: the result of this method will never change, no point in creating a new hash map for each request
     fn base_query(&self) -> HashMap<&str, String> {
-        let mut salt = [0u8; 8];
-        rand::rng().fill_bytes(&mut salt);
-        let salted_password = [self.options.password.as_bytes(), &salt].concat();
+        const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let mut rng = rand::rng();
+        let password_salt: String = (0..8)
+            .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
+            .collect();
 
-        let password_hash_bytes = md5::compute(salted_password).0;
-
-        let password_hash = String::from_utf8_lossy(&password_hash_bytes).to_string();
-        let password_salt = String::from_utf8_lossy(&salt).to_string();
+        let salted_password = [self.options.password.as_bytes(), password_salt.as_bytes()].concat();
+        let password_hash = format!("{:x}", md5::compute(salted_password));
 
         HashMap::from([
             ("u", self.options.username.clone()),
@@ -76,6 +82,58 @@ impl OpenSubsonicClient {
 
         Ok(result.subsonic_response)
     }
+
+    pub async fn get_artists(&self) -> Result<Vec<Artist>> {
+        let request = self.get(self.build_url("getArtists")).build()?;
+
+        let result = self
+            .client
+            .execute(request)
+            .await?
+            .json::<OpenSubsonicResponse<GetArtistsResponse>>()
+            .await?;
+
+        Ok(result
+            .subsonic_response
+            .artists
+            .index
+            .into_iter()
+            .map(|i| i.artist)
+            .flatten()
+            .collect())
+    }
+
+    pub async fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<Album>> {
+        let request = self
+            .get(self.build_url("getArtist"))
+            .query(&[("id", artist_id)])
+            .build()?;
+
+        let result = self
+            .client
+            .execute(request)
+            .await?
+            .json::<OpenSubsonicResponse<GetArtistResponse>>()
+            .await?;
+
+        Ok(result.subsonic_response.artist.album)
+    }
+
+    pub async fn get_album_songs(&self, album_id: &str) -> Result<Vec<Song>> {
+        let request = self
+            .get(self.build_url("getAlbum"))
+            .query(&[("id", album_id)])
+            .build()?;
+
+        let result = self
+            .client
+            .execute(request)
+            .await?
+            .json::<OpenSubsonicResponse<GetAlbumResponse>>()
+            .await?;
+
+        Ok(result.subsonic_response.album.song)
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -90,4 +148,73 @@ pub struct PingResponse {
     version: String,
     r#type: String,
     server_version: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetArtistsResponse {
+    artists: ArtistsIndex,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtistsIndex {
+    index: Vec<ArtistIndexEntry>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtistIndexEntry {
+    artist: Vec<Artist>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Artist {
+    pub id: String,
+    pub name: String,
+    pub album_count: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetArtistResponse {
+    artist: GetArtistArtist,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetArtistArtist {
+    album: Vec<Album>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Album {
+    pub id: String,
+    pub name: String,
+    pub cover_art: String,
+    pub duration: Seconds,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAlbumResponse {
+    album: AlbumWithSongs,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumWithSongs {
+    song: Vec<Song>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Song {
+    pub id: String,
+    pub title: String,
+    pub track: u16,
+    pub year: u16,
+    pub duration: Seconds,
 }

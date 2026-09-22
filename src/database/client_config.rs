@@ -40,13 +40,14 @@ impl ClientConfigRepository {
         Self { database }
     }
 
+    // TODO: perhaps this should be more of an upsert? we do CHECK (id = 1) in the schema, so this insert might fail if the record already exists
     pub fn insert(&self, url: &str, username: &str, password: &str) -> Result<ClientConfig> {
         let cipher = get_cipher()?;
         let nonce = Nonce::generate();
 
         let encrypted_password = cipher.encrypt(&nonce, password.as_bytes())?;
 
-        let connection = self.database.connection();
+        let connection = self.database.connection()?;
         let mut stmt = connection
             .prepare(
                 "INSERT INTO client_config (url, username, password, nonce) VALUES (?1, ?2, ?3, ?4) RETURNING *",
@@ -64,7 +65,7 @@ impl ClientConfigRepository {
     }
 
     pub fn get(&self) -> Result<Option<ClientConfig>> {
-        let connection = self.database.connection();
+        let connection = self.database.connection()?;
 
         // Bruh, this is cursed
         connection

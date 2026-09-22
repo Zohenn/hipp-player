@@ -102,6 +102,8 @@ impl App {
                 )));
             self.service_container.collection.sync();
             self.active_screen = Box::new(HomeScreen::default());
+        } else {
+            self.active_screen = Box::new(LoginScreen::new());
         }
 
         Ok(())

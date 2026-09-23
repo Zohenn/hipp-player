@@ -1,4 +1,5 @@
 use crate::database::core::database::Database;
+use crate::domain::client_config::ClientConfig;
 use aes_gcm::aead::consts::U12;
 use aes_gcm::aead::rand_core::Rng;
 use aes_gcm::aead::{Aead, Generate};
@@ -10,16 +11,6 @@ use keyring::Entry;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_rusqlite::from_row;
-
-#[derive(Deserialize, Serialize)]
-pub struct ClientConfig {
-    id: u32,
-    pub url: String,
-    pub username: String,
-    pub password: String,
-    nonce: [u8; 12],
-    created_at: DateTime<Utc>,
-}
 
 #[derive(Deserialize, Serialize)]
 struct StoredClientConfig {

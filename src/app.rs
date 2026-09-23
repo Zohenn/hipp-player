@@ -100,7 +100,9 @@ impl App {
                     client_config.username,
                     client_config.password,
                 )));
-            self.service_container.collection.sync();
+            if self.service_container.collection.should_sync()? {
+                self.service_container.collection.sync();
+            }
             self.active_screen = Box::new(HomeScreen::default());
         } else {
             self.active_screen = Box::new(LoginScreen::new());

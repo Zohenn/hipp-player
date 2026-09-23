@@ -2,7 +2,7 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::DatabaseMigration;
 
 pub fn get_available_migrations() -> Vec<DatabaseMigration> {
-    vec![version1(), version2()]
+    vec![version1(), version2(), version3()]
 }
 
 fn version1() -> DatabaseMigration {
@@ -88,6 +88,27 @@ CREATE TABLE song_links (
     synced_at TIMESTAMP NOT NULL,
     UNIQUE (source_id, external_id)
 );
+",
+        )?;
+
+        Ok(())
+    })
+}
+
+fn version3() -> DatabaseMigration {
+    DatabaseMigration::new("Sync run history".into(), 3, |database: &Database| {
+        database.connection()?.execute_batch(
+            "\
+CREATE TABLE sync_runs (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES sources(id),
+    started_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%SZ', 'now')),
+    completed_at TIMESTAMP,
+    status TEXT NOT NULL CHECK (status IN ('running', 'success', 'failed', 'partial')),
+    error TEXT
+);
+
+CREATE INDEX idx_sync_runs_source_completed ON sync_runs (source_id, completed_at);
 ",
         )?;
 

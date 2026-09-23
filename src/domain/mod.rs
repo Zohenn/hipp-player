@@ -5,8 +5,11 @@ use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
 use color_eyre::Result;
 use tokio::sync::mpsc::UnboundedSender;
 
+pub mod client_config;
 pub mod collection;
 pub mod login;
+pub mod source;
+pub mod sync_run;
 
 pub enum AppEvent {
     Login(LoginEvent),

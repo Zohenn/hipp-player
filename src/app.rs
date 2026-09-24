@@ -99,6 +99,7 @@ impl App {
                     client_config.username,
                     client_config.password,
                 )));
+            self.service_container.collection.load_from_db()?;
             if self.service_container.collection.should_sync()? {
                 self.service_container.collection.sync();
             }

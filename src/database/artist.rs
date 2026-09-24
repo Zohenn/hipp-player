@@ -1,7 +1,9 @@
 use crate::domain::artist::Artist;
 use chrono::{DateTime, Utc};
 use color_eyre::Result;
-use rusqlite::Connection;
+use color_eyre::eyre::WrapErr;
+use rusqlite::{Connection, OptionalExtension};
+use serde_rusqlite::from_row;
 
 pub struct ArtistRepository;
 
@@ -16,11 +18,29 @@ impl ArtistRepository {
         source_id: i64,
         external_id: &str,
     ) -> Result<Option<Artist>> {
-        todo!()
+        connection
+            .query_row(
+                "SELECT artists.* FROM artists \
+                 JOIN artist_links ON artist_links.artist_id = artists.id \
+                 WHERE artist_links.source_id = ?1 AND artist_links.external_id = ?2",
+                (source_id, external_id),
+                |row| Ok(from_row::<Artist>(row)),
+            )
+            .optional()
+            .context("failed to query artists by link")?
+            .transpose()
+            .context("failed to deserialize artist row")
     }
 
     pub fn insert(&self, connection: &Connection, name: &str) -> Result<Artist> {
-        todo!()
+        connection
+            .query_row(
+                "INSERT INTO artists (name) VALUES (?1) RETURNING *",
+                (name,),
+                |row| Ok(from_row::<Artist>(row)),
+            )
+            .context("failed to insert artists row")?
+            .context("failed to deserialize inserted artist row")
     }
 
     pub fn create_link(
@@ -31,7 +51,15 @@ impl ArtistRepository {
         external_id: &str,
         synced_at: DateTime<Utc>,
     ) -> Result<()> {
-        todo!()
+        connection
+            .execute(
+                "INSERT INTO artist_links (artist_id, source_id, external_id, synced_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                (artist_id, source_id, external_id, synced_at),
+            )
+            .context("failed to insert artist_links row")?;
+
+        Ok(())
     }
 
     pub fn touch_link(
@@ -41,6 +69,31 @@ impl ArtistRepository {
         external_id: &str,
         synced_at: DateTime<Utc>,
     ) -> Result<()> {
-        todo!()
+        connection
+            .execute(
+                "UPDATE artist_links SET synced_at = ?1 WHERE source_id = ?2 AND external_id = ?3",
+                (synced_at, source_id, external_id),
+            )
+            .context("failed to update artist_links row")?;
+
+        Ok(())
+    }
+
+    pub fn upsert(
+        &self,
+        connection: &Connection,
+        source_id: i64,
+        external_id: &str,
+        name: &str,
+        synced_at: DateTime<Utc>,
+    ) -> Result<Artist> {
+        if let Some(artist) = self.find_by_link(connection, source_id, external_id)? {
+            self.touch_link(connection, source_id, external_id, synced_at)?;
+            Ok(artist)
+        } else {
+            let artist = self.insert(connection, name)?;
+            self.create_link(connection, artist.id, source_id, external_id, synced_at)?;
+            Ok(artist)
+        }
     }
 }

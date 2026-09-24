@@ -1,10 +1,14 @@
+use crate::database::album::AlbumRepository;
+use crate::database::artist::ArtistRepository;
 use crate::database::core::database::Database;
+use crate::database::song::SongRepository;
 use crate::database::source::SourceRepository;
 use crate::database::sync_run::SyncRunRepository;
+use crate::domain::album::Album as PersistedAlbum;
 use crate::domain::source::SourceKind;
 use crate::domain::sync_run::SyncRunStatus;
 use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
 use std::fmt::Formatter;
@@ -29,17 +33,13 @@ pub enum CollectionSyncState {
     },
 }
 
-/// Current, readable-without-a-DB-query view of the collection: the latest
-/// sync progress/error (if a sync ever ran) and the albums fetched by the
-/// most recent successful/partial sync.
 #[derive(Clone, Default)]
 pub struct CollectionState {
     pub sync_state: Option<Result<CollectionSyncState, String>>,
-    pub albums: Vec<AlbumWithSongs>,
+    pub albums: Vec<PersistedAlbum>,
 }
 
 pub struct CollectionSyncResult {
-    pub albums: Vec<AlbumWithSongs>,
     pub artist_errors: Vec<ArtistError>,
     pub album_errors: Vec<AlbumError>,
 }
@@ -92,6 +92,17 @@ impl CollectionService {
         self.state.read().unwrap().clone()
     }
 
+    pub fn load_from_db(&self) -> Result<()> {
+        let connection = self.database.connection()?;
+        let albums = AlbumRepository::new()
+            .list_all(&connection)
+            .context("failed to load persisted collection")?;
+
+        self.state.write().unwrap().albums = albums;
+
+        Ok(())
+    }
+
     pub fn should_sync(&self) -> Result<bool> {
         let source_id = self.source_id()?;
         let last_completed_at = SyncRunRepository::new(self.database.clone())
@@ -125,16 +136,12 @@ impl CollectionService {
             let result = Self::inner_sync(state.clone(), client, database).await;
             syncing.store(false, Ordering::SeqCst);
 
-            let mut state = state.write().unwrap();
-            match result {
-                Ok(sync_result) => {
-                    state.sync_state = None;
-                    state.albums = sync_result.albums;
-                }
-                Err(err) => {
-                    state.sync_state = Some(Err(format!("{err:#}")));
-                }
+            if let Err(err) = result {
+                state.write().unwrap().sync_state = Some(Err(format!("{err:#}")));
+                return;
             }
+
+            state.write().unwrap().sync_state = None;
         });
     }
 
@@ -146,12 +153,12 @@ impl CollectionService {
         let source_id = SourceRepository::new(database.clone())
             .find_or_create(SourceKind::OpenSubsonic, &client.options().url)
             .context("failed to resolve source")?;
-        let sync_run_repo = SyncRunRepository::new(database);
+        let sync_run_repo = SyncRunRepository::new(database.clone());
         let sync_run_id = sync_run_repo
             .start(source_id)
             .context("failed to start sync run")?;
 
-        let result = Self::fetch(&state, &client).await;
+        let result = Self::fetch(&state, &client, &database, source_id).await;
 
         match &result {
             Ok(sync_result) => {
@@ -179,6 +186,8 @@ impl CollectionService {
     async fn fetch(
         state: &Arc<RwLock<CollectionState>>,
         client: &OpenSubsonicClient,
+        database: &Database,
+        source_id: i64,
     ) -> Result<CollectionSyncResult> {
         Self::set_sync_progress(state, CollectionSyncState::Started);
 
@@ -192,7 +201,6 @@ impl CollectionService {
 
         let mut album_number = 0u32;
         let mut sync_result = CollectionSyncResult {
-            albums: Vec::<AlbumWithSongs>::with_capacity(album_count as usize),
             artist_errors: Vec::new(),
             album_errors: Vec::new(),
         };
@@ -243,20 +251,94 @@ impl CollectionService {
                     }
                 };
 
-                sync_result.albums.push(AlbumWithSongs { album, songs })
+                match Self::persist_album(
+                    database,
+                    source_id,
+                    &artist.id,
+                    &artist.name,
+                    &album,
+                    &songs,
+                    Utc::now(),
+                )
+                .await
+                {
+                    Ok(db_album) => state.write().unwrap().albums.push(db_album),
+                    Err(err) => sync_result.album_errors.push(AlbumError {
+                        name: album.name,
+                        error: err,
+                    }),
+                }
             }
         }
 
         Ok(sync_result)
     }
 
+    async fn persist_album(
+        database: &Database,
+        source_id: i64,
+        artist_external_id: &str,
+        artist_name: &str,
+        album: &Album,
+        songs: &[Song],
+        synced_at: DateTime<Utc>,
+    ) -> Result<PersistedAlbum> {
+        let database = database.clone();
+        let artist_external_id = artist_external_id.to_string();
+        let artist_name = artist_name.to_string();
+        let album = album.clone();
+        let songs = songs.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<PersistedAlbum> {
+            let mut connection = database.connection()?;
+            let tx = connection
+                .transaction()
+                .context("failed to begin album sync transaction")?;
+
+            let db_artist = ArtistRepository::new().upsert(
+                &tx,
+                source_id,
+                &artist_external_id,
+                &artist_name,
+                synced_at,
+            )?;
+
+            let db_album = AlbumRepository::new().upsert(
+                &tx,
+                db_artist.id,
+                source_id,
+                &album.id,
+                &album.name,
+                Some(&album.cover_art),
+                None,
+                synced_at,
+            )?;
+
+            let song_repo = SongRepository::new();
+            for song in &songs {
+                song_repo.upsert(
+                    &tx,
+                    db_album.id,
+                    source_id,
+                    &song.id,
+                    &song.title,
+                    None,
+                    Some(song.track as i64),
+                    song.duration.get() as i64,
+                    synced_at,
+                )?;
+            }
+
+            tx.commit()
+                .context("failed to commit album sync transaction")?;
+
+            Ok(db_album)
+        })
+        .await
+        .context("album persistence task panicked")?
+    }
+
     fn set_sync_progress(state: &Arc<RwLock<CollectionState>>, sync_state: CollectionSyncState) {
         state.write().unwrap().sync_state = Some(Ok(sync_state));
     }
-}
-
-#[derive(Clone)]
-pub struct AlbumWithSongs {
-    pub album: Album,
-    pub songs: Vec<Song>,
 }

@@ -51,13 +51,12 @@ impl Screen for HomeScreen {
             }
             None => {
                 frame.render_widget(
-                    List::new(state.albums.iter().map(|album| {
-                        Text::from(format!(
-                            "{} - {}",
-                            album.album.id,
-                            album.album.name.as_str()
-                        ))
-                    })),
+                    List::new(
+                        state
+                            .albums
+                            .iter()
+                            .map(|album| Text::from(format!("{} - {}", album.id, album.name))),
+                    ),
                     frame.area(),
                 );
             }

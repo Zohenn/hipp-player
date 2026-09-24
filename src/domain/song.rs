@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 
+#[derive(Clone, serde::Deserialize)]
 pub struct Song {
     pub id: i64,
     pub album_id: i64,

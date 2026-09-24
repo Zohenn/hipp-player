@@ -1,7 +1,6 @@
 use crate::database::core::database::Database;
 use crate::database::source::SourceRepository;
 use crate::database::sync_run::SyncRunRepository;
-use crate::domain::AppEvent;
 use crate::domain::source::SourceKind;
 use crate::domain::sync_run::SyncRunStatus;
 use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
@@ -9,17 +8,11 @@ use chrono::Local;
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
 use std::fmt::Formatter;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::mpsc::UnboundedSender;
+use std::sync::{Arc, RwLock};
 
 pub enum CollectionAction {
     Sync,
-}
-
-pub enum CollectionEvent {
-    SyncState(CollectionSyncState),
-    SyncResult(Result<CollectionSyncResult>),
 }
 
 #[derive(Clone)]
@@ -34,6 +27,15 @@ pub enum CollectionSyncState {
         album_number: u32,
         album_count: u32,
     },
+}
+
+/// Current, readable-without-a-DB-query view of the collection: the latest
+/// sync progress/error (if a sync ever ran) and the albums fetched by the
+/// most recent successful/partial sync.
+#[derive(Clone, Default)]
+pub struct CollectionState {
+    pub sync_state: Option<Result<CollectionSyncState, String>>,
+    pub albums: Vec<AlbumWithSongs>,
 }
 
 pub struct CollectionSyncResult {
@@ -68,26 +70,26 @@ impl std::fmt::Display for AlbumError {
 pub struct CollectionService {
     database: Database,
     client: OpenSubsonicClient,
-    event_tx: UnboundedSender<AppEvent>,
+    state: Arc<RwLock<CollectionState>>,
     syncing: Arc<AtomicBool>,
 }
 
 impl CollectionService {
-    pub fn new(
-        database: Database,
-        client: OpenSubsonicClient,
-        event_tx: UnboundedSender<AppEvent>,
-    ) -> Self {
+    pub fn new(database: Database, client: OpenSubsonicClient) -> Self {
         Self {
             database,
             client,
-            event_tx,
+            state: Arc::new(RwLock::new(CollectionState::default())),
             syncing: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(super) fn set_client(&mut self, client: OpenSubsonicClient) {
         self.client = client;
+    }
+
+    pub fn state(&self) -> CollectionState {
+        self.state.read().unwrap().clone()
     }
 
     pub fn should_sync(&self) -> Result<bool> {
@@ -115,19 +117,29 @@ impl CollectionService {
             return;
         }
 
-        let event_tx = self.event_tx.clone();
         let client = self.client.clone();
         let database = self.database.clone();
         let syncing = self.syncing.clone();
+        let state = self.state.clone();
         tokio::spawn(async move {
-            let result = Self::inner_sync(event_tx.clone(), client, database).await;
+            let result = Self::inner_sync(state.clone(), client, database).await;
             syncing.store(false, Ordering::SeqCst);
-            event_tx.send(AppEvent::Collection(CollectionEvent::SyncResult(result)));
+
+            let mut state = state.write().unwrap();
+            match result {
+                Ok(sync_result) => {
+                    state.sync_state = None;
+                    state.albums = sync_result.albums;
+                }
+                Err(err) => {
+                    state.sync_state = Some(Err(format!("{err:#}")));
+                }
+            }
         });
     }
 
     async fn inner_sync(
-        event_tx: UnboundedSender<AppEvent>,
+        state: Arc<RwLock<CollectionState>>,
         client: OpenSubsonicClient,
         database: Database,
     ) -> Result<CollectionSyncResult> {
@@ -139,7 +151,7 @@ impl CollectionService {
             .start(source_id)
             .context("failed to start sync run")?;
 
-        let result = Self::fetch(&event_tx, &client).await;
+        let result = Self::fetch(&state, &client).await;
 
         match &result {
             Ok(sync_result) => {
@@ -165,12 +177,10 @@ impl CollectionService {
     }
 
     async fn fetch(
-        event_tx: &UnboundedSender<AppEvent>,
+        state: &Arc<RwLock<CollectionState>>,
         client: &OpenSubsonicClient,
     ) -> Result<CollectionSyncResult> {
-        event_tx.send(AppEvent::Collection(CollectionEvent::SyncState(
-            CollectionSyncState::Started,
-        )))?;
+        Self::set_sync_progress(state, CollectionSyncState::Started);
 
         let artists = client
             .get_artists()
@@ -205,7 +215,8 @@ impl CollectionService {
 
             for (album_index, album) in albums.into_iter().enumerate() {
                 album_number += 1;
-                event_tx.send(AppEvent::Collection(CollectionEvent::SyncState(
+                Self::set_sync_progress(
+                    state,
                     CollectionSyncState::Fetching {
                         artist: artist.name.clone(),
                         artist_number: (artist_index + 1) as u32,
@@ -215,7 +226,7 @@ impl CollectionService {
                         album_number,
                         album_count,
                     },
-                )))?;
+                );
 
                 let songs = match client
                     .get_album_songs(&album.id)
@@ -237,6 +248,10 @@ impl CollectionService {
         }
 
         Ok(sync_result)
+    }
+
+    fn set_sync_progress(state: &Arc<RwLock<CollectionState>>, sync_state: CollectionSyncState) {
+        state.write().unwrap().sync_state = Some(Ok(sync_state));
     }
 }
 

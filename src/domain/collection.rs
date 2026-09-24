@@ -11,6 +11,7 @@ use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
 use chrono::{DateTime, Local, Utc};
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
+use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -24,10 +25,7 @@ pub enum CollectionSyncState {
     Started,
     Fetching {
         artist: String,
-        artist_number: u32,
-        artist_count: u32,
-        artist_album_number: u32,
-        artist_album_count: u32,
+        album: String,
         album_number: u32,
         album_count: u32,
     },
@@ -162,6 +160,12 @@ impl CollectionService {
 
         match &result {
             Ok(sync_result) => {
+                // Best-effort: attribution now comes from each album's own
+                // artist id, so an artist-index entry that turned out to be a
+                // duplicate of another can be left with zero albums. Prune
+                // those rather than leaving them dangling.
+                let _ = Self::prune_orphaned_artists(&database, source_id).await;
+
                 let status = if sync_result.artist_errors.is_empty()
                     && sync_result.album_errors.is_empty()
                 {
@@ -196,96 +200,101 @@ impl CollectionService {
             .await
             .context("could not fetch artist list")?;
 
-        let album_count: u32 = artists.iter().map(|artist| artist.album_count).sum();
-        let artist_count = artists.len() as u32;
-
-        let mut album_number = 0u32;
         let mut sync_result = CollectionSyncResult {
             artist_errors: Vec::new(),
             album_errors: Vec::new(),
         };
 
-        for (artist_index, artist) in artists.into_iter().enumerate() {
-            let albums = match client
+        // The artist index can list the same real artist under multiple
+        // entries with overlapping album sets, so discovery is deduped by
+        // album id up front — otherwise a shared album gets fetched,
+        // persisted, and pushed into state once per duplicate entry.
+        let mut albums = Vec::new();
+        let mut seen_album_ids = HashSet::new();
+        for artist in artists {
+            match client
                 .get_artist_albums(&artist.id)
                 .await
                 .context("could not fetch album list")
             {
-                Ok(albums) => albums,
+                Ok(artist_albums) => {
+                    for album in artist_albums {
+                        if seen_album_ids.insert(album.id.clone()) {
+                            albums.push(album);
+                        }
+                    }
+                }
+                Err(err) => sync_result.artist_errors.push(ArtistError {
+                    name: artist.name,
+                    error: err,
+                }),
+            }
+        }
+
+        let album_count = albums.len() as u32;
+
+        for (album_index, album) in albums.into_iter().enumerate() {
+            Self::set_sync_progress(
+                state,
+                CollectionSyncState::Fetching {
+                    artist: album.artist.clone(),
+                    album: album.name.clone(),
+                    album_number: (album_index + 1) as u32,
+                    album_count,
+                },
+            );
+
+            let songs = match client
+                .get_album_songs(&album.id)
+                .await
+                .context("could not fetch songs list")
+            {
+                Ok(songs) => songs,
                 Err(err) => {
-                    sync_result.artist_errors.push(ArtistError {
-                        name: artist.name,
+                    sync_result.album_errors.push(AlbumError {
+                        name: album.name,
                         error: err,
                     });
                     continue;
                 }
             };
 
-            for (album_index, album) in albums.into_iter().enumerate() {
-                album_number += 1;
-                Self::set_sync_progress(
-                    state,
-                    CollectionSyncState::Fetching {
-                        artist: artist.name.clone(),
-                        artist_number: (artist_index + 1) as u32,
-                        artist_count,
-                        artist_album_number: (album_index + 1) as u32,
-                        artist_album_count: artist.album_count,
-                        album_number,
-                        album_count,
-                    },
-                );
-
-                let songs = match client
-                    .get_album_songs(&album.id)
-                    .await
-                    .context("could not fetch songs list")
-                {
-                    Ok(songs) => songs,
-                    Err(err) => {
-                        sync_result.album_errors.push(AlbumError {
-                            name: album.name,
-                            error: err,
-                        });
-                        continue;
-                    }
-                };
-
-                match Self::persist_album(
-                    database,
-                    source_id,
-                    &artist.id,
-                    &artist.name,
-                    &album,
-                    &songs,
-                    Utc::now(),
-                )
-                .await
-                {
-                    Ok(db_album) => state.write().unwrap().albums.push(db_album),
-                    Err(err) => sync_result.album_errors.push(AlbumError {
-                        name: album.name,
-                        error: err,
-                    }),
-                }
+            match Self::persist_album(database, source_id, &album, &songs, Utc::now()).await {
+                Ok(db_album) => state.write().unwrap().albums.push(db_album),
+                Err(err) => sync_result.album_errors.push(AlbumError {
+                    name: album.name,
+                    error: err,
+                }),
             }
         }
 
         Ok(sync_result)
     }
 
+    async fn prune_orphaned_artists(database: &Database, source_id: i64) -> Result<()> {
+        let database = database.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let connection = database.connection()?;
+            ArtistRepository::new().delete_orphaned(&connection, source_id)
+        })
+        .await
+        .context("artist cleanup task panicked")?
+    }
+
+    /// Attribution uses the album's own reported artist id/name, not whichever
+    /// artist-index entry we discovered the album under — OpenSubsonic servers
+    /// have been observed listing the same real artist under multiple index
+    /// entries with overlapping album sets, but each album itself reports a
+    /// single unambiguous artist.
     async fn persist_album(
         database: &Database,
         source_id: i64,
-        artist_external_id: &str,
-        artist_name: &str,
         album: &Album,
         songs: &[Song],
         synced_at: DateTime<Utc>,
     ) -> Result<PersistedAlbum> {
         let database = database.clone();
-        let artist_external_id = artist_external_id.to_string();
-        let artist_name = artist_name.to_string();
         let album = album.clone();
         let songs = songs.to_vec();
 
@@ -298,8 +307,8 @@ impl CollectionService {
             let db_artist = ArtistRepository::new().upsert(
                 &tx,
                 source_id,
-                &artist_external_id,
-                &artist_name,
+                &album.artist_id,
+                &album.artist,
                 synced_at,
             )?;
 

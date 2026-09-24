@@ -33,15 +33,14 @@ impl Screen for HomeScreen {
                 }
                 CollectionSyncState::Fetching {
                     artist,
-                    artist_number,
-                    artist_count,
-                    artist_album_number,
-                    artist_album_count,
+                    album,
                     album_number,
                     album_count,
                 } => {
                     frame.render_widget(
-                        Paragraph::new(format!("Artist ({artist_number}/{artist_count}): {artist}. Album {artist_album_number}/{artist_album_count} ({album_number}/{album_count} total)")),
+                        Paragraph::new(format!(
+                            "Album {album_number}/{album_count}: {artist} - {album}"
+                        )),
                         frame.area(),
                     );
                 }

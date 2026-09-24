@@ -96,4 +96,25 @@ impl ArtistRepository {
             Ok(artist)
         }
     }
+
+    pub fn delete_orphaned(&self, connection: &Connection, source_id: i64) -> Result<()> {
+        connection
+            .execute(
+                "DELETE FROM artist_links \
+                 WHERE source_id = ?1 AND artist_id NOT IN (SELECT DISTINCT artist_id FROM albums)",
+                (source_id,),
+            )
+            .context("failed to delete orphaned artist_links rows")?;
+
+        connection
+            .execute(
+                "DELETE FROM artists \
+                 WHERE id NOT IN (SELECT artist_id FROM artist_links) \
+                   AND id NOT IN (SELECT DISTINCT artist_id FROM albums)",
+                (),
+            )
+            .context("failed to delete orphaned artists rows")?;
+
+        Ok(())
+    }
 }

@@ -14,7 +14,7 @@ impl AlbumRepository {
 
     pub fn list_all(&self, connection: &Connection) -> Result<Vec<Album>> {
         let mut stmt = connection
-            .prepare("SELECT * FROM albums ORDER BY name")
+            .prepare("SELECT * FROM albums ORDER BY id")
             .context("failed to prepare albums query")?;
 
         from_rows::<Album>(stmt.query(()).context("failed to query albums")?)
@@ -110,7 +110,13 @@ impl AlbumRepository {
         synced_at: DateTime<Utc>,
     ) -> Result<Album> {
         if let Some(album) = self.find_by_link(connection, source_id, external_id)? {
-            self.touch_link(connection, source_id, external_id, music_folder_id, synced_at)?;
+            self.touch_link(
+                connection,
+                source_id,
+                external_id,
+                music_folder_id,
+                synced_at,
+            )?;
             Ok(album)
         } else {
             let album = self.insert(connection, artist_id, name, cover_art)?;

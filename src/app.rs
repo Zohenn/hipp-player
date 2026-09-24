@@ -103,7 +103,8 @@ impl App {
             if self.service_container.collection.should_sync()? {
                 self.service_container.collection.sync();
             }
-            self.active_screen = Box::new(HomeScreen::new(self.service_container.collection.clone()));
+            self.active_screen =
+                Box::new(HomeScreen::new(self.service_container.collection.clone()));
         } else {
             self.active_screen = Box::new(LoginScreen::new());
         }
@@ -118,10 +119,11 @@ impl App {
             AppEvent::Login(event) => match event {
                 LoginEvent::LoginResult(result) => match result {
                     Ok(login_result) => {
-                        self.service_container.client = login_result.client;
+                        self.service_container.set_client(login_result.client);
                         self.overlay = None;
                         self.active_screen =
                             Box::new(HomeScreen::new(self.service_container.collection.clone()));
+                        self.service_container.collection.sync();
                     }
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },

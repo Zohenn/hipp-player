@@ -193,6 +193,8 @@ pub struct GetArtistArtist {
 pub struct Album {
     pub id: String,
     pub name: String,
+    pub artist: String,
+    pub artist_id: String,
     pub cover_art: String,
     pub duration: Seconds,
 }

@@ -2,6 +2,7 @@ use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::database::Database;
 use crate::database::core::migration::migrate;
 use crate::domain::login::LoginEvent;
+use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
 use crate::screens::home::HomeScreen;
@@ -100,8 +101,8 @@ impl App {
                     client_config.password,
                 )));
             self.service_container.collection.load_from_db()?;
-            if self.service_container.collection.should_sync()? {
-                self.service_container.collection.sync();
+            if let Some(kind) = self.service_container.collection.due_sync()? {
+                self.service_container.collection.sync(kind);
             }
             self.active_screen =
                 Box::new(HomeScreen::new(self.service_container.collection.clone()));
@@ -123,7 +124,7 @@ impl App {
                         self.overlay = None;
                         self.active_screen =
                             Box::new(HomeScreen::new(self.service_container.collection.clone()));
-                        self.service_container.collection.sync();
+                        self.service_container.collection.sync(SyncKind::Full);
                     }
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },

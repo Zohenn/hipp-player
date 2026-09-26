@@ -2,7 +2,7 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::DatabaseMigration;
 
 pub fn get_available_migrations() -> Vec<DatabaseMigration> {
-    vec![version1(), version2(), version3()]
+    vec![version1(), version2(), version3(), version4()]
 }
 
 fn version1() -> DatabaseMigration {
@@ -109,6 +109,45 @@ CREATE TABLE sync_runs (
 );
 
 CREATE INDEX idx_sync_runs_source_completed ON sync_runs (source_id, completed_at);
+",
+        )?;
+
+        Ok(())
+    })
+}
+
+fn version4() -> DatabaseMigration {
+    DatabaseMigration::new("Sync run kind".into(), 4, |database: &Database| {
+        // SQLite can't add NOT NULL to an existing column, so after backfilling
+        // the table is rebuilt with the final column definition.
+        database.connection()?.execute_batch(
+            "\
+BEGIN;
+
+ALTER TABLE sync_runs ADD COLUMN kind TEXT;
+
+UPDATE sync_runs SET kind = 'full';
+
+CREATE TABLE sync_runs_new (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES sources(id),
+    kind TEXT NOT NULL CHECK (kind IN ('full', 'incremental')),
+    started_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%SZ', 'now')),
+    completed_at TIMESTAMP,
+    status TEXT NOT NULL CHECK (status IN ('running', 'success', 'failed', 'partial')),
+    error TEXT
+);
+
+INSERT INTO sync_runs_new (id, source_id, kind, started_at, completed_at, status, error)
+SELECT id, source_id, kind, started_at, completed_at, status, error FROM sync_runs;
+
+DROP TABLE sync_runs;
+
+ALTER TABLE sync_runs_new RENAME TO sync_runs;
+
+CREATE INDEX idx_sync_runs_source_completed ON sync_runs (source_id, completed_at);
+
+COMMIT;
 ",
         )?;
 

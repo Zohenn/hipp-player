@@ -13,3 +13,18 @@ impl SyncRunStatus {
         }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SyncKind {
+    Full,
+    Incremental,
+}
+
+impl SyncKind {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            SyncKind::Full => "full",
+            SyncKind::Incremental => "incremental",
+        }
+    }
+}

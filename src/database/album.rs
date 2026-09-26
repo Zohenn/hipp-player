@@ -59,6 +59,25 @@ impl AlbumRepository {
             .context("failed to deserialize inserted album row")
     }
 
+    pub fn update(
+        &self,
+        connection: &Connection,
+        id: i64,
+        artist_id: i64,
+        name: &str,
+        cover_art: Option<&str>,
+    ) -> Result<Album> {
+        connection
+            .query_row(
+                "UPDATE albums SET artist_id = ?1, name = ?2, cover_art = ?3 \
+                 WHERE id = ?4 RETURNING *",
+                (artist_id, name, cover_art, id),
+                |row| Ok(from_row::<Album>(row)),
+            )
+            .context("failed to update albums row")?
+            .context("failed to deserialize updated album row")
+    }
+
     pub fn create_link(
         &self,
         connection: &Connection,
@@ -117,7 +136,7 @@ impl AlbumRepository {
                 music_folder_id,
                 synced_at,
             )?;
-            Ok(album)
+            self.update(connection, album.id, artist_id, name, cover_art)
         } else {
             let album = self.insert(connection, artist_id, name, cover_art)?;
             self.create_link(

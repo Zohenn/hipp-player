@@ -43,6 +43,17 @@ impl ArtistRepository {
             .context("failed to deserialize inserted artist row")
     }
 
+    pub fn update(&self, connection: &Connection, id: i64, name: &str) -> Result<Artist> {
+        connection
+            .query_row(
+                "UPDATE artists SET name = ?1 WHERE id = ?2 RETURNING *",
+                (name, id),
+                |row| Ok(from_row::<Artist>(row)),
+            )
+            .context("failed to update artists row")?
+            .context("failed to deserialize updated artist row")
+    }
+
     pub fn create_link(
         &self,
         connection: &Connection,
@@ -89,7 +100,7 @@ impl ArtistRepository {
     ) -> Result<Artist> {
         if let Some(artist) = self.find_by_link(connection, source_id, external_id)? {
             self.touch_link(connection, source_id, external_id, synced_at)?;
-            Ok(artist)
+            self.update(connection, artist.id, name)
         } else {
             let artist = self.insert(connection, name)?;
             self.create_link(connection, artist.id, source_id, external_id, synced_at)?;

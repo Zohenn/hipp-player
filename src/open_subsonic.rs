@@ -1,4 +1,5 @@
 use crate::types::Seconds;
+use chrono::{DateTime, Utc};
 use rand::RngExt;
 use reqwest::Result;
 use reqwest::{IntoUrl, RequestBuilder};
@@ -119,6 +120,26 @@ impl OpenSubsonicClient {
         Ok(result.subsonic_response.artist.album)
     }
 
+    pub async fn get_newest_albums(&self, size: u32, offset: u32) -> Result<Vec<Album>> {
+        let request = self
+            .get(self.build_url("getAlbumList2"))
+            .query(&[
+                ("type", "newest".to_string()),
+                ("size", size.to_string()),
+                ("offset", offset.to_string()),
+            ])
+            .build()?;
+
+        let result = self
+            .client
+            .execute(request)
+            .await?
+            .json::<OpenSubsonicResponse<GetAlbumList2Response>>()
+            .await?;
+
+        Ok(result.subsonic_response.album_list2.album)
+    }
+
     pub async fn get_album_songs(&self, album_id: &str) -> Result<Vec<Song>> {
         let request = self
             .get(self.build_url("getAlbum"))
@@ -197,6 +218,35 @@ pub struct Album {
     pub artist_id: String,
     pub cover_art: String,
     pub duration: Seconds,
+    #[serde(default, deserialize_with = "lenient_datetime")]
+    pub created: Option<DateTime<Utc>>,
+}
+
+/// A malformed date shouldn't fail the whole response it's part of.
+fn lenient_datetime<'de, D>(deserializer: D) -> std::result::Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        DateTime::parse_from_rfc3339(&value)
+            .ok()
+            .map(|dt| dt.to_utc())
+    }))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAlbumList2Response {
+    album_list2: AlbumList2,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumList2 {
+    // Omitted by servers when the page is empty.
+    #[serde(default)]
+    album: Vec<Album>,
 }
 
 #[derive(serde::Deserialize)]

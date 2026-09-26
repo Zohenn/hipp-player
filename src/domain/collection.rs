@@ -6,15 +6,21 @@ use crate::database::source::SourceRepository;
 use crate::database::sync_run::SyncRunRepository;
 use crate::domain::album::Album as PersistedAlbum;
 use crate::domain::source::SourceKind;
-use crate::domain::sync_run::SyncRunStatus;
+use crate::domain::sync_run::{SyncKind, SyncRunStatus};
 use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeDelta, Utc};
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
 use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+
+const FULL_SYNC_INTERVAL: TimeDelta = TimeDelta::days(7);
+// Re-checks albums added shortly before the previous sync's start, absorbing
+// clock skew between us and the server; re-syncing an album is harmless.
+const INCREMENTAL_SYNC_OVERLAP: TimeDelta = TimeDelta::days(1);
+const NEWEST_ALBUMS_PAGE_SIZE: u32 = 50;
 
 pub enum CollectionAction {
     Sync,
@@ -101,18 +107,25 @@ impl CollectionService {
         Ok(())
     }
 
-    pub fn should_sync(&self) -> Result<bool> {
+    pub fn due_sync(&self) -> Result<Option<SyncKind>> {
         let source_id = self.source_id()?;
-        let last_completed_at = SyncRunRepository::new(self.database.clone())
-            .last_completed_at(source_id)
-            .context("failed to check last sync time")?;
+        let sync_run_repo = SyncRunRepository::new(self.database.clone());
 
-        Ok(match last_completed_at {
-            None => true,
-            Some(last_completed_at) => {
-                last_completed_at.with_timezone(&Local).date_naive() < Local::now().date_naive()
-            }
-        })
+        let last_full_at = sync_run_repo
+            .last_completed_at(source_id, Some(SyncKind::Full))
+            .context("failed to check last full sync time")?;
+        if last_full_at.is_none_or(|last_full_at| Utc::now() - last_full_at >= FULL_SYNC_INTERVAL) {
+            return Ok(Some(SyncKind::Full));
+        }
+
+        let last_any_at = sync_run_repo
+            .last_completed_at(source_id, None)
+            .context("failed to check last sync time")?;
+        let synced_today = last_any_at.is_some_and(|last_any_at| {
+            last_any_at.with_timezone(&Local).date_naive() >= Local::now().date_naive()
+        });
+
+        Ok((!synced_today).then_some(SyncKind::Incremental))
     }
 
     fn source_id(&self) -> Result<i64> {
@@ -121,7 +134,7 @@ impl CollectionService {
             .context("failed to resolve source")
     }
 
-    pub fn sync(&self) {
+    pub fn sync(&self, kind: SyncKind) {
         if self.syncing.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -131,7 +144,7 @@ impl CollectionService {
         let syncing = self.syncing.clone();
         let state = self.state.clone();
         tokio::spawn(async move {
-            let result = Self::inner_sync(state.clone(), client, database).await;
+            let result = Self::inner_sync(state.clone(), client, database, kind).await;
             syncing.store(false, Ordering::SeqCst);
 
             if let Err(err) = result {
@@ -147,16 +160,33 @@ impl CollectionService {
         state: Arc<RwLock<CollectionState>>,
         client: OpenSubsonicClient,
         database: Database,
+        kind: SyncKind,
     ) -> Result<CollectionSyncResult> {
         let source_id = SourceRepository::new(database.clone())
             .find_or_create(SourceKind::OpenSubsonic, &client.options().url)
             .context("failed to resolve source")?;
         let sync_run_repo = SyncRunRepository::new(database.clone());
+        // Read before starting the new run, otherwise the cutoff would be the
+        // new run's own start time.
+        let incremental_since = match kind {
+            SyncKind::Full => None,
+            SyncKind::Incremental => sync_run_repo
+                .last_completed_started_at(source_id)
+                .context("failed to check last sync time")?
+                .map(|started_at| started_at - INCREMENTAL_SYNC_OVERLAP),
+        };
+        // Without a previous run there's nothing to be incremental against.
+        let kind = if incremental_since.is_some() {
+            SyncKind::Incremental
+        } else {
+            SyncKind::Full
+        };
+
         let sync_run_id = sync_run_repo
-            .start(source_id)
+            .start(source_id, kind)
             .context("failed to start sync run")?;
 
-        let result = Self::fetch(&state, &client, &database, source_id).await;
+        let result = Self::fetch(&state, &client, &database, source_id, incremental_since).await;
 
         match &result {
             Ok(sync_result) => {
@@ -165,6 +195,11 @@ impl CollectionService {
                 // duplicate of another can be left with zero albums. Prune
                 // those rather than leaving them dangling.
                 let _ = Self::prune_orphaned_artists(&database, source_id).await;
+
+                // TODO: after a successful full sync, albums/songs whose link
+                // `synced_at` predates this run no longer exist on the server.
+                // Don't delete them in the background — surface them to the
+                // user and let them decide what to do.
 
                 let status = if sync_result.artist_errors.is_empty()
                     && sync_result.album_errors.is_empty()
@@ -192,47 +227,21 @@ impl CollectionService {
         client: &OpenSubsonicClient,
         database: &Database,
         source_id: i64,
+        incremental_since: Option<DateTime<Utc>>,
     ) -> Result<CollectionSyncResult> {
         Self::set_sync_progress(state, CollectionSyncState::Started);
-
-        let artists = client
-            .get_artists()
-            .await
-            .context("could not fetch artist list")?;
 
         let mut sync_result = CollectionSyncResult {
             artist_errors: Vec::new(),
             album_errors: Vec::new(),
         };
 
-        // The artist index can list the same real artist under multiple
-        // entries with overlapping album sets, so discovery is deduped by
-        // album id up front — otherwise a shared album gets fetched,
-        // persisted, and pushed into state once per duplicate entry.
-        let mut albums = Vec::new();
-        let mut seen_album_ids = HashSet::new();
-        for artist in artists {
-            match client
-                .get_artist_albums(&artist.id)
-                .await
-                .context("could not fetch album list")
-            {
-                Ok(artist_albums) => {
-                    for album in artist_albums {
-                        if seen_album_ids.insert(album.id.clone()) {
-                            albums.push(album);
-                        }
-                    }
-                }
-                Err(err) => sync_result.artist_errors.push(ArtistError {
-                    name: artist.name,
-                    error: err,
-                }),
-            }
-        }
+        let albums = match incremental_since {
+            None => Self::discover_all_albums(client, &mut sync_result).await?,
+            Some(since) => Self::discover_new_albums(client, since).await?,
+        };
 
         let album_count = albums.len() as u32;
-
         for (album_index, album) in albums.into_iter().enumerate() {
             Self::set_sync_progress(
                 state,
@@ -260,7 +269,7 @@ impl CollectionService {
             };
 
             match Self::persist_album(database, source_id, &album, &songs, Utc::now()).await {
-                Ok(db_album) => state.write().unwrap().albums.push(db_album),
+                Ok(db_album) => Self::upsert_state_album(state, db_album),
                 Err(err) => sync_result.album_errors.push(AlbumError {
                     name: album.name,
                     error: err,
@@ -269,6 +278,81 @@ impl CollectionService {
         }
 
         Ok(sync_result)
+    }
+
+    async fn discover_all_albums(
+        client: &OpenSubsonicClient,
+        sync_result: &mut CollectionSyncResult,
+    ) -> Result<Vec<Album>> {
+        let artists = client
+            .get_artists()
+            .await
+            .context("could not fetch artist list")?;
+
+        // The artist index can list the same real artist under multiple
+        // entries with overlapping album sets, so discovery is deduped by
+        // album id up front — otherwise a shared album gets fetched,
+        // persisted, and pushed into state once per duplicate entry.
+        let mut albums = Vec::new();
+        let mut seen_album_ids = HashSet::new();
+        for artist in artists {
+            match client
+                .get_artist_albums(&artist.id)
+                .await
+                .context("could not fetch album list")
+            {
+                Ok(artist_albums) => {
+                    for album in artist_albums {
+                        if seen_album_ids.insert(album.id.clone()) {
+                            albums.push(album);
+                        }
+                    }
+                }
+                Err(err) => sync_result.artist_errors.push(ArtistError {
+                    name: artist.name,
+                    error: err,
+                }),
+            }
+        }
+
+        Ok(albums)
+    }
+
+    /// Pages through the server's albums newest-first until reaching ones
+    /// added before `since`. Albums without a `created` date can't be placed
+    /// in time, so they're synced and paging continues past them.
+    async fn discover_new_albums(
+        client: &OpenSubsonicClient,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<Album>> {
+        let mut albums = Vec::new();
+        let mut seen_album_ids = HashSet::new();
+        let mut offset = 0;
+
+        loop {
+            let page = client
+                .get_newest_albums(NEWEST_ALBUMS_PAGE_SIZE, offset)
+                .await
+                .context("could not fetch newest albums")?;
+            let page_len = page.len() as u32;
+
+            let mut reached_known = false;
+            for album in page {
+                if album.created.is_some_and(|created| created < since) {
+                    reached_known = true;
+                    break;
+                }
+                // Pages can shift if albums are added mid-sync.
+                if seen_album_ids.insert(album.id.clone()) {
+                    albums.push(album);
+                }
+            }
+
+            if reached_known || page_len < NEWEST_ALBUMS_PAGE_SIZE {
+                return Ok(albums);
+            }
+            offset += page_len;
+        }
     }
 
     async fn prune_orphaned_artists(database: &Database, source_id: i64) -> Result<()> {
@@ -345,6 +429,16 @@ impl CollectionService {
         })
         .await
         .context("album persistence task panicked")?
+    }
+
+    /// State is pre-filled from the local db on startup, so a synced album may
+    /// already be present — replace it in place rather than appending a duplicate.
+    fn upsert_state_album(state: &Arc<RwLock<CollectionState>>, album: PersistedAlbum) {
+        let albums = &mut state.write().unwrap().albums;
+        match albums.iter_mut().find(|existing| existing.id == album.id) {
+            Some(existing) => *existing = album,
+            None => albums.push(album),
+        }
     }
 
     fn set_sync_progress(state: &Arc<RwLock<CollectionState>>, sync_state: CollectionSyncState) {

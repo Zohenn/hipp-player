@@ -52,6 +52,34 @@ impl SongRepository {
             .context("failed to deserialize inserted song row")
     }
 
+    pub fn update(
+        &self,
+        connection: &Connection,
+        id: i64,
+        album_id: i64,
+        title: &str,
+        disc_number: Option<i64>,
+        track_number: Option<i64>,
+        duration_seconds: i64,
+    ) -> Result<Song> {
+        connection
+            .query_row(
+                "UPDATE songs SET album_id = ?1, title = ?2, disc_number = ?3, track_number = ?4, \
+                 duration_seconds = ?5 WHERE id = ?6 RETURNING *",
+                (
+                    album_id,
+                    title,
+                    disc_number,
+                    track_number,
+                    duration_seconds,
+                    id,
+                ),
+                |row| Ok(from_row::<Song>(row)),
+            )
+            .context("failed to update songs row")?
+            .context("failed to deserialize updated song row")
+    }
+
     pub fn create_link(
         &self,
         connection: &Connection,
@@ -102,7 +130,15 @@ impl SongRepository {
     ) -> Result<Song> {
         if let Some(song) = self.find_by_link(connection, source_id, external_id)? {
             self.touch_link(connection, source_id, external_id, synced_at)?;
-            Ok(song)
+            self.update(
+                connection,
+                song.id,
+                album_id,
+                title,
+                disc_number,
+                track_number,
+                duration_seconds,
+            )
         } else {
             let song = self.insert(
                 connection,

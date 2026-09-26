@@ -6,7 +6,7 @@ use ratatui::crossterm::event::Event;
 pub trait Screen {
     fn handle_input_event(&mut self, event: Event) -> Option<Action>;
     fn handle_async_event(&mut self, event: &AppEvent);
-    fn render(&self, frame: &mut Frame);
+    fn render(&mut self, frame: &mut Frame);
 }
 
 pub enum Action {

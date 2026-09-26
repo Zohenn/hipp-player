@@ -9,6 +9,7 @@ pub struct Theme {
     pub bg_darker: Color,
     pub fg: Color,
     pub fg_active: Color,
+    pub fg_muted: Color,
     pub border: Color,
 }
 
@@ -20,6 +21,7 @@ impl Default for Theme {
             bg_darker: bg.darken(0.02),
             fg: Color::Rgb(255, 255, 255),
             fg_active: Color::Rgb(3, 253, 145),
+            fg_muted: Color::Rgb(136, 136, 136),
             border: Color::Rgb(136, 136, 136),
         }
     }

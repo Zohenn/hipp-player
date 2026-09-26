@@ -36,12 +36,18 @@ impl SyncRunRepository {
             .context("failed to insert sync_runs row")
     }
 
-    pub fn complete(&self, id: i64, status: SyncRunStatus, error: Option<&str>) -> Result<()> {
+    pub fn complete(
+        &self,
+        id: i64,
+        status: SyncRunStatus,
+        error: Option<&str>,
+        completed_at: DateTime<Utc>,
+    ) -> Result<()> {
         self.database
             .connection()?
             .execute(
                 "UPDATE sync_runs SET status = ?1, error = ?2, completed_at = ?3 WHERE id = ?4",
-                (status.as_str(), error, Utc::now(), id),
+                (status.as_str(), error, completed_at, id),
             )
             .context("failed to complete sync_runs row")?;
 

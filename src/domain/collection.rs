@@ -5,13 +5,15 @@ use crate::database::song::SongRepository;
 use crate::database::source::SourceRepository;
 use crate::database::sync_run::SyncRunRepository;
 use crate::domain::album::Album as PersistedAlbum;
+use crate::domain::artist::Artist as PersistedArtist;
+use crate::domain::song::Song as PersistedSong;
 use crate::domain::source::SourceKind;
 use crate::domain::sync_run::{SyncKind, SyncRunStatus};
 use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -41,6 +43,8 @@ pub enum CollectionSyncState {
 pub struct CollectionState {
     pub sync_state: Option<Result<CollectionSyncState, String>>,
     pub albums: Vec<PersistedAlbum>,
+    pub artists: HashMap<i64, PersistedArtist>,
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 pub struct CollectionSyncResult {
@@ -92,8 +96,11 @@ impl CollectionService {
         self.client = client;
     }
 
-    pub fn state(&self) -> CollectionState {
-        self.state.read().unwrap().clone()
+    /// Borrows the state under a read lock instead of cloning it, so callers
+    /// like per-frame rendering don't copy the whole collection. Keep `f`
+    /// short — sync progress updates block while it runs.
+    pub fn with_state<R>(&self, f: impl FnOnce(&CollectionState) -> R) -> R {
+        f(&self.state.read().unwrap())
     }
 
     pub fn load_from_db(&self) -> Result<()> {
@@ -101,10 +108,32 @@ impl CollectionService {
         let albums = AlbumRepository::new()
             .list_all(&connection)
             .context("failed to load persisted collection")?;
+        let artists = ArtistRepository::new()
+            .list_all(&connection)
+            .context("failed to load persisted collection")?;
+        // Same definition of "synced" as due_sync: failed runs don't count.
+        let last_synced_at = SyncRunRepository::new(self.database.clone())
+            .last_completed_at(self.source_id()?, None)
+            .context("failed to check last sync time")?;
 
-        self.state.write().unwrap().albums = albums;
+        let mut state = self.state.write().unwrap();
+        state.albums = albums;
+        state.artists = artists
+            .into_iter()
+            .map(|artist| (artist.id, artist))
+            .collect();
+        state.last_synced_at = last_synced_at;
 
         Ok(())
+    }
+
+    /// Songs aren't kept in state — only the opened album's are needed, so
+    /// they're read from the db on demand.
+    pub fn album_songs(&self, album_id: i64) -> Result<Vec<PersistedSong>> {
+        let connection = self.database.connection()?;
+        SongRepository::new()
+            .list_by_album(&connection, album_id)
+            .context("failed to load album songs")
     }
 
     pub fn due_sync(&self) -> Result<Option<SyncKind>> {
@@ -208,13 +237,16 @@ impl CollectionService {
                 } else {
                     SyncRunStatus::Partial
                 };
-                sync_run_repo.complete(sync_run_id, status, None)?;
+                let completed_at = Utc::now();
+                sync_run_repo.complete(sync_run_id, status, None, completed_at)?;
+                state.write().unwrap().last_synced_at = Some(completed_at);
             }
             Err(err) => {
                 sync_run_repo.complete(
                     sync_run_id,
                     SyncRunStatus::Failed,
                     Some(&format!("{err:#}")),
+                    Utc::now(),
                 )?;
             }
         }
@@ -269,7 +301,7 @@ impl CollectionService {
             };
 
             match Self::persist_album(database, source_id, &album, &songs, Utc::now()).await {
-                Ok(db_album) => Self::upsert_state_album(state, db_album),
+                Ok((db_artist, db_album)) => Self::upsert_state_album(state, db_artist, db_album),
                 Err(err) => sync_result.album_errors.push(AlbumError {
                     name: album.name,
                     error: err,
@@ -377,12 +409,12 @@ impl CollectionService {
         album: &Album,
         songs: &[Song],
         synced_at: DateTime<Utc>,
-    ) -> Result<PersistedAlbum> {
+    ) -> Result<(PersistedArtist, PersistedAlbum)> {
         let database = database.clone();
         let album = album.clone();
         let songs = songs.to_vec();
 
-        tokio::task::spawn_blocking(move || -> Result<PersistedAlbum> {
+        tokio::task::spawn_blocking(move || -> Result<(PersistedArtist, PersistedAlbum)> {
             let mut connection = database.connection()?;
             let tx = connection
                 .transaction()
@@ -415,7 +447,7 @@ impl CollectionService {
                     source_id,
                     &song.id,
                     &song.title,
-                    None,
+                    song.disc_number.map(i64::from),
                     Some(song.track as i64),
                     song.duration.get() as i64,
                     synced_at,
@@ -425,7 +457,7 @@ impl CollectionService {
             tx.commit()
                 .context("failed to commit album sync transaction")?;
 
-            Ok(db_album)
+            Ok((db_artist, db_album))
         })
         .await
         .context("album persistence task panicked")?
@@ -433,8 +465,14 @@ impl CollectionService {
 
     /// State is pre-filled from the local db on startup, so a synced album may
     /// already be present — replace it in place rather than appending a duplicate.
-    fn upsert_state_album(state: &Arc<RwLock<CollectionState>>, album: PersistedAlbum) {
-        let albums = &mut state.write().unwrap().albums;
+    fn upsert_state_album(
+        state: &Arc<RwLock<CollectionState>>,
+        artist: PersistedArtist,
+        album: PersistedAlbum,
+    ) {
+        let mut state = state.write().unwrap();
+        state.artists.insert(artist.id, artist);
+        let albums = &mut state.albums;
         match albums.iter_mut().find(|existing| existing.id == album.id) {
             Some(existing) => *existing = album,
             None => albums.push(album),

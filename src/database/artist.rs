@@ -3,13 +3,23 @@ use chrono::{DateTime, Utc};
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr;
 use rusqlite::{Connection, OptionalExtension};
-use serde_rusqlite::from_row;
+use serde_rusqlite::{from_row, from_rows};
 
 pub struct ArtistRepository;
 
 impl ArtistRepository {
     pub fn new() -> Self {
         Self
+    }
+
+    pub fn list_all(&self, connection: &Connection) -> Result<Vec<Artist>> {
+        let mut stmt = connection
+            .prepare("SELECT * FROM artists ORDER BY id")
+            .context("failed to prepare artists query")?;
+
+        from_rows::<Artist>(stmt.query(()).context("failed to query artists")?)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to deserialize artists")
     }
 
     pub fn find_by_link(

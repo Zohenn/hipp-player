@@ -267,6 +267,9 @@ pub struct Song {
     pub id: String,
     pub title: String,
     pub track: u16,
+    // Optional in the OpenSubsonic spec; servers omit it for single-disc albums.
+    #[serde(default)]
+    pub disc_number: Option<u16>,
     pub year: u16,
     pub duration: Seconds,
 }

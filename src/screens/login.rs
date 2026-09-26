@@ -87,7 +87,7 @@ impl Screen for LoginScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame) {
         let theme = get_app_theme();
 
         let content_area = frame

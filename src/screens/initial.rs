@@ -15,7 +15,7 @@ impl Screen for InitScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame) {
         // let layout = Layout::vertical([
         //     Constraint::Fill(1),
         //     Constraint::Length(1),

@@ -1,6 +1,7 @@
 use crate::database::client_config::ClientConfigRepository;
+use crate::database::core::backup::DatabaseBackup;
 use crate::database::core::database::Database;
-use crate::database::core::migration::migrate;
+use crate::database::core::migration::{has_pending_migrations, migrate};
 use crate::domain::login::LoginEvent;
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
@@ -36,7 +37,16 @@ pub struct App {
 impl App {
     pub fn new() -> Result<Self> {
         let database = Database::new()?;
+        let backup = DatabaseBackup::new(database.clone())?;
+        // A backup from earlier today may predate data written since, so a
+        // migration always gets a fresh one.
+        if has_pending_migrations(&database)? {
+            backup.create()?;
+        } else {
+            backup.create_if_due()?;
+        }
         migrate(&database)?;
+        backup.spawn_periodic();
         let (event_tx, event_rx) = unbounded_channel::<AppEvent>();
 
         Ok(Self {

@@ -25,6 +25,10 @@ pub fn migrate(database: &Database) -> Result<()> {
     Ok(())
 }
 
+pub fn has_pending_migrations(database: &Database) -> Result<bool> {
+    Ok(find_next_migration(database, &get_available_migrations())?.is_some())
+}
+
 fn find_next_migration<'a>(
     database: &Database,
     available_migrations: &'a [DatabaseMigration],

@@ -4,7 +4,7 @@ use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crossterm::event::Event;
 use ratatui::Frame;
-use ratatui::layout::Constraint;
+use ratatui::layout::{Constraint, Margin};
 use ratatui::prelude::Layout;
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Text;
@@ -30,10 +30,12 @@ impl Screen for HomeScreen {
     fn render(&self, frame: &mut Frame) {
         let state = self.collection.state();
         let theme = get_app_theme();
-        let [main_area, gap_area, sync_status_area] = frame.area().layout(&Layout::vertical([
+        let screen_area = frame.area().inner(Margin::new(1, 1));
+        frame.render_widget(Block::new().bg(theme.bg), screen_area);
+
+        let [main_area, sync_status_area] = screen_area.layout(&Layout::vertical([
             Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ]));
 
         frame.render_widget(
@@ -63,6 +65,13 @@ impl Screen for HomeScreen {
             None => Paragraph::new("No sync happening"),
         };
 
-        frame.render_widget(paragraph.block(Block::new().bg(theme.bg)), sync_status_area);
+        frame.render_widget(
+            paragraph.block(
+                Block::new()
+                    .borders(Borders::TOP)
+                    .border_style(Style::new().fg(theme.border)),
+            ),
+            sync_status_area,
+        );
     }
 }

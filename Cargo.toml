@@ -27,3 +27,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 hex = "0.4.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.35.0"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+lru = "0.18.5"
+webp = { version = "0.3.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

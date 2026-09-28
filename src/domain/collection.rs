@@ -1,6 +1,7 @@
 use crate::database::album::AlbumRepository;
 use crate::database::artist::ArtistRepository;
 use crate::database::core::database::Database;
+use crate::database::cover_art::CoverArtRepository;
 use crate::database::song::SongRepository;
 use crate::database::source::SourceRepository;
 use crate::database::sync_run::SyncRunRepository;
@@ -428,16 +429,23 @@ impl CollectionService {
                 synced_at,
             )?;
 
-            let db_album = AlbumRepository::new().upsert(
+            let (db_album, album_link_id) = AlbumRepository::new().upsert(
                 &tx,
                 db_artist.id,
                 source_id,
                 &album.id,
                 &album.name,
-                Some(&album.cover_art),
                 None,
                 synced_at,
             )?;
+
+            let cover_art_repo = CoverArtRepository::new();
+            match &album.cover_art {
+                Some(cover_art) => {
+                    cover_art_repo.upsert(&tx, album_link_id, cover_art, synced_at)?
+                }
+                None => cover_art_repo.delete_by_link(&tx, album_link_id)?,
+            }
 
             let song_repo = SongRepository::new();
             for song in &songs {

@@ -1,21 +1,27 @@
 use crate::domain::AppEvent;
 use crate::domain::collection::{CollectionService, CollectionState, CollectionSyncState};
+use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
 use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
 use chrono::Local;
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Margin, Rect};
+use ratatui::layout::{Constraint, Flex, Margin, Rect};
 use ratatui::prelude::Layout;
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{
     Block, Borders, List, ListState, Padding, Paragraph, Row, Table, TableState,
 };
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{FontSize, Resize, StatefulImage};
 
 pub struct HomeScreen {
     collection: CollectionService,
+    cover_art: CoverArtService,
+    picker: Picker,
     album_list: ListState,
     open_album: Option<OpenAlbum>,
     focus: Focus,
@@ -25,6 +31,14 @@ struct OpenAlbum {
     album_id: i64,
     songs: Result<Vec<Song>, String>,
     song_table: TableState,
+    cover: Cover,
+}
+
+enum Cover {
+    Loading,
+    Ready(StatefulProtocol),
+    /// No cover, or it failed to load — either way nothing to show.
+    Unavailable,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -34,9 +48,11 @@ enum Focus {
 }
 
 impl HomeScreen {
-    pub fn new(collection: CollectionService) -> Self {
+    pub fn new(collection: CollectionService, cover_art: CoverArtService, picker: Picker) -> Self {
         Self {
             collection,
+            cover_art,
+            picker,
             album_list: ListState::default(),
             open_album: None,
             focus: Focus::Albums,
@@ -67,7 +83,9 @@ impl HomeScreen {
                 .album_songs(album_id)
                 .map_err(|err| format!("{err:#}")),
             song_table: TableState::default().with_selected(Some(0)),
+            cover: Cover::Loading,
         });
+        self.cover_art.request(album_id);
         self.focus = Focus::Songs;
     }
 }
@@ -96,17 +114,39 @@ impl Screen for HomeScreen {
         None
     }
 
-    fn handle_async_event(&mut self, event: &AppEvent) {}
+    fn handle_async_event(&mut self, event: &AppEvent) {
+        // The user may have moved on to another album while this one loaded.
+        if let AppEvent::CoverArt(CoverArtEvent::Loaded { album_id, result }) = event
+            && let Some(open_album) = &mut self.open_album
+            && open_album.album_id == *album_id
+        {
+            open_album.cover = match result {
+                Ok(Some(image)) => {
+                    Cover::Ready(self.picker.new_resize_protocol(image.as_ref().clone()))
+                }
+                Ok(None) | Err(_) => Cover::Unavailable,
+            };
+        }
+    }
 
     fn render(&mut self, frame: &mut Frame) {
         let Self {
             collection,
+            picker,
             album_list,
             open_album,
             focus,
+            ..
         } = self;
         collection.with_state(|state| {
-            render_state(frame, state, album_list, open_album.as_mut(), *focus)
+            render_state(
+                frame,
+                state,
+                album_list,
+                open_album.as_mut(),
+                *focus,
+                picker.font_size(),
+            )
         });
     }
 }
@@ -117,6 +157,7 @@ fn render_state(
     album_list: &mut ListState,
     open_album: Option<&mut OpenAlbum>,
     focus: Focus,
+    font_size: FontSize,
 ) {
     let theme = get_app_theme();
     let screen_area = frame.area().inner(Margin::new(1, 1));
@@ -164,6 +205,7 @@ fn render_state(
         state,
         open_album,
         focus == Focus::Songs,
+        font_size,
         &theme,
     );
 
@@ -207,6 +249,7 @@ fn render_album_details(
     state: &CollectionState,
     open_album: Option<&mut OpenAlbum>,
     focused: bool,
+    font_size: FontSize,
     theme: &Theme,
 ) {
     let block = Block::new()
@@ -228,16 +271,27 @@ fn render_album_details(
         return;
     };
 
-    let [header_area, songs_area] = inner_area.layout(&Layout::vertical([
+    // Space stays reserved while loading so the layout doesn't jump once
+    // the cover arrives.
+    let (cover_height, cover_gap) = match open_album.cover {
+        Cover::Unavailable => (0, 0),
+        Cover::Loading | Cover::Ready(_) => (cover_height(inner_area, font_size), 1),
+    };
+    let [cover_area, _, header_area, songs_area] = inner_area.layout(&Layout::vertical([
+        Constraint::Length(cover_height),
+        Constraint::Length(cover_gap),
         Constraint::Length(3),
         Constraint::Fill(1),
     ]));
+
+    render_cover(frame, cover_area, &mut open_album.cover, font_size, theme);
 
     frame.render_widget(
         Text::from(vec![
             Line::from(album.name.as_str()).fg(theme.fg),
             Line::from(artist_name(state, album.artist_id)).fg(theme.fg_muted),
-        ]),
+        ])
+        .centered(),
         header_area,
     );
 
@@ -292,6 +346,38 @@ fn render_album_details(
         songs_area,
         song_table,
     );
+}
+
+/// Covers take up to half of the panel's height, like the now-playing view
+/// of a mobile player, leaving the rest for the song list.
+fn cover_height(area: Rect, font_size: FontSize) -> u16 {
+    // A square in pixels is `font_height / font_width` times wider than it is
+    // tall in cells.
+    let height_for_width =
+        u32::from(area.width) * u32::from(font_size.width) / u32::from(font_size.height);
+    (area.height / 2).min(height_for_width as u16)
+}
+
+fn render_cover(
+    frame: &mut Frame,
+    area: Rect,
+    cover: &mut Cover,
+    font_size: FontSize,
+    theme: &Theme,
+) {
+    let width = u32::from(area.height) * u32::from(font_size.height) / u32::from(font_size.width);
+    let [area] =
+        area.layout(&Layout::horizontal([Constraint::Length(width as u16)]).flex(Flex::Center));
+
+    match cover {
+        Cover::Loading => frame.render_widget(Block::new().bg(theme.bg_darker), area),
+        Cover::Ready(protocol) => frame.render_stateful_widget(
+            StatefulImage::default().resize(Resize::Fit(None)),
+            area,
+            protocol,
+        ),
+        Cover::Unavailable => {}
+    }
 }
 
 /// `select_next`/`select_previous` can leave the selection past the end

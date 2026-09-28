@@ -2,7 +2,7 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::DatabaseMigration;
 
 pub fn get_available_migrations() -> Vec<DatabaseMigration> {
-    vec![version1(), version2(), version3(), version4()]
+    vec![version1(), version2(), version3(), version4(), version5()]
 }
 
 fn version1() -> DatabaseMigration {
@@ -146,6 +146,38 @@ DROP TABLE sync_runs;
 ALTER TABLE sync_runs_new RENAME TO sync_runs;
 
 CREATE INDEX idx_sync_runs_source_completed ON sync_runs (source_id, completed_at);
+
+COMMIT;
+",
+        )?;
+
+        Ok(())
+    })
+}
+
+fn version5() -> DatabaseMigration {
+    DatabaseMigration::new("Album link covers".into(), 5, |database: &Database| {
+        // Covers belong to a source's view of an album, not to the album
+        // itself — every existing album has exactly one link, so its cover
+        // moves onto that link.
+        database.connection()?.execute_batch(
+            "\
+BEGIN;
+
+CREATE TABLE album_link_covers (
+    id INTEGER PRIMARY KEY,
+    album_link_id INTEGER NOT NULL UNIQUE REFERENCES album_links(id),
+    external_id TEXT NOT NULL,
+    synced_at TIMESTAMP NOT NULL
+);
+
+INSERT INTO album_link_covers (album_link_id, external_id, synced_at)
+SELECT album_links.id, albums.cover_art, album_links.synced_at
+FROM album_links
+JOIN albums ON albums.id = album_links.album_id
+WHERE albums.cover_art IS NOT NULL AND albums.cover_art != '';
+
+ALTER TABLE albums DROP COLUMN cover_art;
 
 COMMIT;
 ",

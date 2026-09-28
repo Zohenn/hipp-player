@@ -42,17 +42,11 @@ impl AlbumRepository {
             .context("failed to deserialize album row")
     }
 
-    pub fn insert(
-        &self,
-        connection: &Connection,
-        artist_id: i64,
-        name: &str,
-        cover_art: Option<&str>,
-    ) -> Result<Album> {
+    pub fn insert(&self, connection: &Connection, artist_id: i64, name: &str) -> Result<Album> {
         connection
             .query_row(
-                "INSERT INTO albums (artist_id, name, cover_art) VALUES (?1, ?2, ?3) RETURNING *",
-                (artist_id, name, cover_art),
+                "INSERT INTO albums (artist_id, name) VALUES (?1, ?2) RETURNING *",
+                (artist_id, name),
                 |row| Ok(from_row::<Album>(row)),
             )
             .context("failed to insert albums row")?
@@ -65,13 +59,11 @@ impl AlbumRepository {
         id: i64,
         artist_id: i64,
         name: &str,
-        cover_art: Option<&str>,
     ) -> Result<Album> {
         connection
             .query_row(
-                "UPDATE albums SET artist_id = ?1, name = ?2, cover_art = ?3 \
-                 WHERE id = ?4 RETURNING *",
-                (artist_id, name, cover_art, id),
+                "UPDATE albums SET artist_id = ?1, name = ?2 WHERE id = ?3 RETURNING *",
+                (artist_id, name, id),
                 |row| Ok(from_row::<Album>(row)),
             )
             .context("failed to update albums row")?
@@ -86,16 +78,15 @@ impl AlbumRepository {
         external_id: &str,
         music_folder_id: Option<&str>,
         synced_at: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         connection
-            .execute(
+            .query_row(
                 "INSERT INTO album_links (album_id, source_id, external_id, music_folder_id, synced_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
                 (album_id, source_id, external_id, music_folder_id, synced_at),
+                |row| row.get(0),
             )
-            .context("failed to insert album_links row")?;
-
-        Ok(())
+            .context("failed to insert album_links row")
     }
 
     pub fn touch_link(
@@ -105,18 +96,18 @@ impl AlbumRepository {
         external_id: &str,
         music_folder_id: Option<&str>,
         synced_at: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         connection
-            .execute(
+            .query_row(
                 "UPDATE album_links SET music_folder_id = ?1, synced_at = ?2 \
-                 WHERE source_id = ?3 AND external_id = ?4",
+                 WHERE source_id = ?3 AND external_id = ?4 RETURNING id",
                 (music_folder_id, synced_at, source_id, external_id),
+                |row| row.get(0),
             )
-            .context("failed to update album_links row")?;
-
-        Ok(())
+            .context("failed to update album_links row")
     }
 
+    /// Returns the album along with the id of its link to `source_id`.
     pub fn upsert(
         &self,
         connection: &Connection,
@@ -124,22 +115,22 @@ impl AlbumRepository {
         source_id: i64,
         external_id: &str,
         name: &str,
-        cover_art: Option<&str>,
         music_folder_id: Option<&str>,
         synced_at: DateTime<Utc>,
-    ) -> Result<Album> {
+    ) -> Result<(Album, i64)> {
         if let Some(album) = self.find_by_link(connection, source_id, external_id)? {
-            self.touch_link(
+            let link_id = self.touch_link(
                 connection,
                 source_id,
                 external_id,
                 music_folder_id,
                 synced_at,
             )?;
-            self.update(connection, album.id, artist_id, name, cover_art)
+            let album = self.update(connection, album.id, artist_id, name)?;
+            Ok((album, link_id))
         } else {
-            let album = self.insert(connection, artist_id, name, cover_art)?;
-            self.create_link(
+            let album = self.insert(connection, artist_id, name)?;
+            let link_id = self.create_link(
                 connection,
                 album.id,
                 source_id,
@@ -147,7 +138,7 @@ impl AlbumRepository {
                 music_folder_id,
                 synced_at,
             )?;
-            Ok(album)
+            Ok((album, link_id))
         }
     }
 }

@@ -155,6 +155,23 @@ impl OpenSubsonicClient {
 
         Ok(result.subsonic_response.album.song)
     }
+
+    /// Returns the raw image bytes, in whatever format the server stores.
+    /// `size` asks the server to scale it down, which not every server does.
+    pub async fn get_cover_art(&self, cover_art_id: &str, size: u32) -> Result<Vec<u8>> {
+        let request = self
+            .get(self.build_url("getCoverArt"))
+            .query(&[("id", cover_art_id.to_string()), ("size", size.to_string())])
+            .build()?;
+
+        self.client
+            .execute(request)
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await
+            .map(Vec::from)
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -216,7 +233,9 @@ pub struct Album {
     pub name: String,
     pub artist: String,
     pub artist_id: String,
-    pub cover_art: String,
+    // Optional in the OpenSubsonic spec; missing for albums without art.
+    #[serde(default)]
+    pub cover_art: Option<String>,
     pub duration: Seconds,
     #[serde(default, deserialize_with = "lenient_datetime")]
     pub created: Option<DateTime<Utc>>,

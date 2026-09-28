@@ -20,6 +20,7 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Paragraph};
+use ratatui_image::picker::Picker;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -32,6 +33,7 @@ pub struct App {
     service_container: ServiceContainer,
     active_screen: Box<dyn Screen>,
     overlay: Option<AppOverlay>,
+    picker: Picker,
 }
 
 impl App {
@@ -48,6 +50,9 @@ impl App {
         migrate(&database)?;
         backup.spawn_periodic();
         let (event_tx, event_rx) = unbounded_channel::<AppEvent>();
+        // Queries the terminal over stdin, so it has to happen before the
+        // input EventStream starts reading from it.
+        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
         Ok(Self {
             should_quit: false,
@@ -55,6 +60,7 @@ impl App {
             service_container: ServiceContainer::new(database, event_tx)?,
             active_screen: Box::new(InitScreen {}),
             overlay: None,
+            picker,
             // overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
         })
     }
@@ -114,8 +120,7 @@ impl App {
             if let Some(kind) = self.service_container.collection.due_sync()? {
                 self.service_container.collection.sync(kind);
             }
-            self.active_screen =
-                Box::new(HomeScreen::new(self.service_container.collection.clone()));
+            self.active_screen = Box::new(self.home_screen());
         } else {
             self.active_screen = Box::new(LoginScreen::new());
         }
@@ -132,14 +137,22 @@ impl App {
                     Ok(login_result) => {
                         self.service_container.set_client(login_result.client);
                         self.overlay = None;
-                        self.active_screen =
-                            Box::new(HomeScreen::new(self.service_container.collection.clone()));
+                        self.active_screen = Box::new(self.home_screen());
                         self.service_container.collection.sync(SyncKind::Full);
                     }
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },
             },
+            AppEvent::CoverArt(_) => {}
         }
+    }
+
+    fn home_screen(&self) -> HomeScreen {
+        HomeScreen::new(
+            self.service_container.collection.clone(),
+            self.service_container.cover_art.clone(),
+            self.picker.clone(),
+        )
     }
 
     fn handle_input_event(&mut self, event: Event) {

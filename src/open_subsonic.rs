@@ -140,7 +140,7 @@ impl OpenSubsonicClient {
         Ok(result.subsonic_response.album_list2.album)
     }
 
-    pub async fn get_album_songs(&self, album_id: &str) -> Result<Vec<Song>> {
+    pub async fn get_album(&self, album_id: &str) -> Result<AlbumWithSongs> {
         let request = self
             .get(self.build_url("getAlbum"))
             .query(&[("id", album_id)])
@@ -153,7 +153,7 @@ impl OpenSubsonicClient {
             .json::<OpenSubsonicResponse<GetAlbumResponse>>()
             .await?;
 
-        Ok(result.subsonic_response.album.song)
+        Ok(result.subsonic_response.album)
     }
 
     /// Returns the raw image bytes, in whatever format the server stores.
@@ -232,7 +232,6 @@ pub struct Album {
     pub id: String,
     pub name: String,
     pub artist: String,
-    pub artist_id: String,
     // Optional in the OpenSubsonic spec; missing for albums without art.
     #[serde(default)]
     pub cover_art: Option<String>,
@@ -249,6 +248,7 @@ where
     let value = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
     Ok(value.and_then(|value| {
         DateTime::parse_from_rfc3339(&value)
+            .or_else(|_| DateTime::parse_from_rfc2822(&value))
             .ok()
             .map(|dt| dt.to_utc())
     }))
@@ -277,7 +277,9 @@ pub struct GetAlbumResponse {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumWithSongs {
-    song: Vec<Song>,
+    // List endpoints don't reliably report it, so artist attribution comes from here.
+    pub artist_id: String,
+    pub song: Vec<Song>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -291,4 +293,42 @@ pub struct Song {
     pub disc_number: Option<u16>,
     pub year: u16,
     pub duration: Seconds,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[derive(serde::Deserialize)]
+    struct Dated {
+        #[serde(default, deserialize_with = "lenient_datetime")]
+        created: Option<DateTime<Utc>>,
+    }
+
+    fn parse(json: &str) -> Option<DateTime<Utc>> {
+        serde_json::from_str::<Dated>(json).unwrap().created
+    }
+
+    #[test]
+    fn lenient_datetime_accepts_rfc3339() {
+        assert_eq!(
+            parse(r#"{"created": "2026-07-24T15:45:51Z"}"#),
+            Some(Utc.with_ymd_and_hms(2026, 7, 24, 15, 45, 51).unwrap())
+        );
+    }
+
+    #[test]
+    fn lenient_datetime_accepts_rfc2822() {
+        assert_eq!(
+            parse(r#"{"created": "24 Jul 2026 15:45:51 GMT"}"#),
+            Some(Utc.with_ymd_and_hms(2026, 7, 24, 15, 45, 51).unwrap())
+        );
+    }
+
+    #[test]
+    fn lenient_datetime_ignores_garbage() {
+        assert_eq!(parse(r#"{"created": "yesterday"}"#), None);
+        assert_eq!(parse(r#"{}"#), None);
+    }
 }

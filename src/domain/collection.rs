@@ -10,7 +10,7 @@ use crate::domain::artist::Artist as PersistedArtist;
 use crate::domain::song::Song as PersistedSong;
 use crate::domain::source::SourceKind;
 use crate::domain::sync_run::{SyncKind, SyncRunStatus};
-use crate::open_subsonic::{Album, OpenSubsonicClient, Song};
+use crate::open_subsonic::{Album, AlbumWithSongs, OpenSubsonicClient};
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use color_eyre::eyre::Context;
 use color_eyre::{Report, Result};
@@ -286,12 +286,12 @@ impl CollectionService {
                 },
             );
 
-            let songs = match client
-                .get_album_songs(&album.id)
+            let details = match client
+                .get_album(&album.id)
                 .await
-                .context("could not fetch songs list")
+                .context("could not fetch album details")
             {
-                Ok(songs) => songs,
+                Ok(details) => details,
                 Err(err) => {
                     sync_result.album_errors.push(AlbumError {
                         name: album.name,
@@ -301,7 +301,7 @@ impl CollectionService {
                 }
             };
 
-            match Self::persist_album(database, source_id, &album, &songs, Utc::now()).await {
+            match Self::persist_album(database, source_id, &album, details, Utc::now()).await {
                 Ok((db_artist, db_album)) => Self::upsert_state_album(state, db_artist, db_album),
                 Err(err) => sync_result.album_errors.push(AlbumError {
                     name: album.name,
@@ -399,21 +399,20 @@ impl CollectionService {
         .context("artist cleanup task panicked")?
     }
 
-    /// Attribution uses the album's own reported artist id/name, not whichever
+    /// Attribution uses the artist id from `getAlbum`, not whichever
     /// artist-index entry we discovered the album under — OpenSubsonic servers
     /// have been observed listing the same real artist under multiple index
-    /// entries with overlapping album sets, but each album itself reports a
-    /// single unambiguous artist.
+    /// entries with overlapping album sets, and list endpoints may omit the
+    /// artist id entirely, but `getAlbum` reports a single unambiguous artist.
     async fn persist_album(
         database: &Database,
         source_id: i64,
         album: &Album,
-        songs: &[Song],
+        details: AlbumWithSongs,
         synced_at: DateTime<Utc>,
     ) -> Result<(PersistedArtist, PersistedAlbum)> {
         let database = database.clone();
         let album = album.clone();
-        let songs = songs.to_vec();
 
         tokio::task::spawn_blocking(move || -> Result<(PersistedArtist, PersistedAlbum)> {
             let mut connection = database.connection()?;
@@ -424,7 +423,7 @@ impl CollectionService {
             let db_artist = ArtistRepository::new().upsert(
                 &tx,
                 source_id,
-                &album.artist_id,
+                &details.artist_id,
                 &album.artist,
                 synced_at,
             )?;
@@ -448,7 +447,7 @@ impl CollectionService {
             }
 
             let song_repo = SongRepository::new();
-            for song in &songs {
+            for song in &details.song {
                 song_repo.upsert(
                     &tx,
                     db_album.id,

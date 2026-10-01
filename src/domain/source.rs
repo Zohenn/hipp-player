@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 pub struct Source {
     pub id: i64,
@@ -7,7 +8,9 @@ pub struct Source {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Deserialize)]
 pub enum SourceKind {
+    #[serde(rename = "opensubsonic")]
     OpenSubsonic,
 }
 

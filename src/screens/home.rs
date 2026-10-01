@@ -105,6 +105,14 @@ impl Screen for HomeScreen {
                     KeyCode::Up => open_album.song_table.select_previous(),
                     KeyCode::Down => open_album.song_table.select_next(),
                     KeyCode::Left => self.focus = Focus::Albums,
+                    KeyCode::Enter => {
+                        if let Some(index) = open_album.song_table.selected() {
+                            let song = open_album.songs.as_ref().map(|songs| songs.get(index)).ok();
+                            if let Some(Some(song)) = song {
+                                return Some(Action::PlaySong(song.id));
+                            }
+                        }
+                    }
                     _ => {}
                 },
                 (Focus::Songs, None) => self.focus = Focus::Albums,

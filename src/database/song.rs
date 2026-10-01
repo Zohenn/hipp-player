@@ -1,8 +1,10 @@
 use crate::domain::song::Song;
+use crate::domain::source::SourceKind;
 use chrono::{DateTime, Utc};
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr;
 use rusqlite::{Connection, OptionalExtension};
+use serde::Deserialize;
 use serde_rusqlite::{from_row, from_rows};
 
 pub struct SongRepository;
@@ -165,4 +167,29 @@ impl SongRepository {
             Ok(song)
         }
     }
+
+    pub fn find_links(&self, connection: &Connection, song_id: i64) -> Result<Vec<SongLink>> {
+        let mut stmt = connection
+            .prepare(
+                "SELECT song_links.source_id as source_id, sources.kind as source_kind, song_links.external_id as external_id \
+            FROM song_links \
+            JOIN sources ON song_links.source_id = sources.id \
+            WHERE song_links.song_id = ?",
+            )
+            .context("failed to prepare song_links query")?;
+
+        from_rows::<SongLink>(
+            stmt.query((song_id,))
+                .context("failed to query song_links")?,
+        )
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to deserialize song_links")
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SongLink {
+    pub source_id: i64,
+    pub source_kind: SourceKind,
+    pub external_id: String,
 }

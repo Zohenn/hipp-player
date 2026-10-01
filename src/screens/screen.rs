@@ -12,5 +12,6 @@ pub trait Screen {
 pub enum Action {
     Login(LoginAction),
     SwitchScreen(Box<dyn Screen>),
+    PlaySong(i64),
     Quit,
 }

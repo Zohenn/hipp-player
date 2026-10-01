@@ -2,6 +2,7 @@ use crate::app::App;
 use color_eyre::Result;
 
 mod app;
+pub mod data;
 pub mod database;
 pub mod debug;
 pub mod domain;

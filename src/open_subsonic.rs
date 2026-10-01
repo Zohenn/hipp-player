@@ -1,9 +1,11 @@
 use crate::types::Seconds;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
 use reqwest::Result;
 use reqwest::{IntoUrl, RequestBuilder};
 use std::collections::HashMap;
+use tokio_stream::Stream;
 
 #[derive(Default, Clone)]
 pub struct OpenSubsonicOptions {
@@ -171,6 +173,18 @@ impl OpenSubsonicClient {
             .bytes()
             .await
             .map(Vec::from)
+    }
+
+    pub async fn stream_song(
+        &self,
+        song_id: &str,
+    ) -> Result<impl Stream<Item = Result<Bytes>> + use<>> {
+        let request = self
+            .get(self.build_url("stream"))
+            .query(&[("id", song_id.to_string())])
+            .build()?;
+
+        Ok(self.client.execute(request).await?.bytes_stream())
     }
 }
 

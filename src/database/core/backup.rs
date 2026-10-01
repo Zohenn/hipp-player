@@ -1,4 +1,5 @@
-use crate::database::core::database::{Database, app_data_dir};
+use crate::data::app_data_dir;
+use crate::database::core::database::Database;
 use chrono::Local;
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr;

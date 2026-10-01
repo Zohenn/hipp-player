@@ -2,7 +2,9 @@ use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::backup::DatabaseBackup;
 use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
+use crate::dbg_file;
 use crate::domain::login::LoginEvent;
+use crate::domain::player::PlayerEvent;
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -10,20 +12,17 @@ use crate::screens::home::HomeScreen;
 use crate::screens::initial::InitScreen;
 use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
-use crate::theme::{Theme, get_app_theme};
+use crate::theme::get_app_theme;
 use crate::ui::control::{ControlStyle, set_default_style};
 use crate::ui::overlay::{AppOverlay, Overlay};
 use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use log::log;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Block;
 use ratatui_image::picker::Picker;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio_stream::StreamExt;
 
@@ -144,6 +143,14 @@ impl App {
                 },
             },
             AppEvent::CoverArt(_) => {}
+            AppEvent::Player(event) => match event {
+                PlayerEvent::Error(err) => self.overlay = Some(AppOverlay::error(Some(err))),
+                _ => {
+                    if let Err(err) = self.service_container.player.handle_event(event) {
+                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                    }
+                }
+            },
         }
     }
 
@@ -185,6 +192,12 @@ impl App {
                     self.service_container.login.handle_action(login_action)
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
+                Action::PlaySong(song_id) => {
+                    match self.service_container.player.play(song_id) {
+                        Err(e) => dbg_file!(format!("play error: {:#?}", e)),
+                        _ => {}
+                    };
+                }
                 Action::Quit => todo!(),
             }
         }

@@ -1,4 +1,5 @@
-use crate::database::core::database::{Database, app_data_dir};
+use crate::data::app_data_dir;
+use crate::database::core::database::Database;
 use crate::database::cover_art::CoverArtRepository;
 use crate::domain::AppEvent;
 use crate::open_subsonic::OpenSubsonicClient;

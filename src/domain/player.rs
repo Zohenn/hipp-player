@@ -22,6 +22,10 @@ pub struct PlayerService {
     event_tx: UnboundedSender<AppEvent>,
     sink: Arc<Mutex<Option<(MixerDeviceSink, Player)>>>,
     current_request: u64,
+    // Request whose file is currently in the sink; differs from
+    // `current_request` while the next song is still being fetched.
+    loaded_request: u64,
+    current_song: Option<PlayingSongDetails>,
 }
 
 pub enum PlayerEvent {
@@ -29,26 +33,32 @@ pub enum PlayerEvent {
         request_id: u64,
         file: std::fs::File,
     },
-    PlaybackStateUpdate(PlaybackState),
+    StreamFailed {
+        request_id: u64,
+        error: String,
+    },
     Error(String),
 }
 
+#[derive(Clone)]
 pub struct PlayingSongDetails {
     pub song_id: i64,
     pub song_title: String,
     pub song_duration: i64,
+    pub artist_name: String,
     pub album_id: i64,
-    pub album_title: String,
+    pub album_name: String,
 }
 
 impl PlayingSongDetails {
-    pub fn new(song: &Song, album: &Album) -> Self {
+    pub fn new(song: &Song, artist_name: String, album: &Album) -> Self {
         Self {
             song_id: song.id,
             song_title: song.title.clone(),
             song_duration: song.duration_seconds,
+            artist_name,
             album_id: album.id,
-            album_title: song.title.clone(),
+            album_name: album.name.clone(),
         }
     }
 }
@@ -57,10 +67,11 @@ pub enum PlaybackState {
     Loading,
     Playing(Duration),
     Paused(Duration),
+    Stopped,
 }
 
-pub struct PlayerState {
-    pub details: PlayingSongDetails,
+pub struct PlayerState<'a> {
+    pub details: &'a PlayingSongDetails,
     pub playback_state: PlaybackState,
 }
 
@@ -76,6 +87,8 @@ impl PlayerService {
             event_tx,
             sink: Arc::new(Mutex::new(None)),
             current_request: 0,
+            loaded_request: 0,
+            current_song: None,
         }
     }
 
@@ -84,11 +97,15 @@ impl PlayerService {
         self.open_subsonic_streaming_service.set_client(client);
     }
 
-    pub fn play(&mut self, song_id: i64) -> Result<()> {
-        let links = SongRepository::new().find_links(&*self.database.connection()?, song_id)?;
-        let preferred_link = links
-            .get(0)
-            .ok_or(eyre!("Song does not exist or has no links: {}", song_id))?;
+    pub fn play(&mut self, details: PlayingSongDetails) -> Result<()> {
+        let links =
+            SongRepository::new().find_links(&*self.database.connection()?, details.song_id)?;
+        let preferred_link = links.get(0).ok_or(eyre!(
+            "Song does not exist or has no links: {}",
+            details.song_id
+        ))?;
+
+        self.current_song = Some(details);
 
         match preferred_link.source_kind {
             SourceKind::OpenSubsonic => self.play_from_opensubsonic(&preferred_link.external_id),
@@ -104,12 +121,19 @@ impl PlayerService {
                     return Ok(());
                 }
 
-                self.play_from_file(file)
+                let result = self.play_from_file(file, request_id);
+                if result.is_err() {
+                    self.current_song = None;
+                }
+                result
             }
-            _ => {
-                // we don't care about other events here
+            PlayerEvent::StreamFailed { request_id, .. } => {
+                if request_id == self.current_request {
+                    self.current_song = None;
+                }
                 Ok(())
             }
+            PlayerEvent::Error(_) => Ok(()),
         }
     }
 
@@ -127,9 +151,10 @@ impl PlayerService {
                     request_id,
                     file,
                 })),
-                Err(err) => {
-                    event_tx.send(AppEvent::Player(PlayerEvent::Error(format!("{:#}", err))))
-                }
+                Err(err) => event_tx.send(AppEvent::Player(PlayerEvent::StreamFailed {
+                    request_id,
+                    error: format!("{:#}", err),
+                })),
             };
 
             if let Err(err) = send_result {
@@ -138,7 +163,7 @@ impl PlayerService {
         });
     }
 
-    fn play_from_file(&mut self, file: std::fs::File) -> Result<()> {
+    fn play_from_file(&mut self, file: std::fs::File, request_id: u64) -> Result<()> {
         let mut guard = self.sink.lock().unwrap();
 
         if guard.is_none() {
@@ -151,14 +176,30 @@ impl PlayerService {
         player.clear();
         player.append(rodio::decoder::Decoder::new(BufReader::new(file))?);
 
-        player.set_volume(0.5);
+        player.set_volume(0.2);
         player.play();
-
-        self.event_tx
-            .send(AppEvent::Player(PlayerEvent::PlaybackStateUpdate(
-                PlaybackState::Playing(Duration::ZERO),
-            )))?;
+        self.loaded_request = request_id;
 
         Ok(())
+    }
+
+    pub fn snapshot(&self) -> Option<PlayerState<'_>> {
+        let details = self.current_song.as_ref()?;
+
+        let playback_state = if self.loaded_request != self.current_request {
+            PlaybackState::Loading
+        } else {
+            match self.sink.lock().unwrap().as_ref() {
+                Some((_, player)) if player.empty() => PlaybackState::Stopped,
+                Some((_, player)) if player.is_paused() => PlaybackState::Paused(player.get_pos()),
+                Some((_, player)) => PlaybackState::Playing(player.get_pos()),
+                None => PlaybackState::Loading,
+            }
+        };
+
+        Some(PlayerState {
+            details,
+            playback_state,
+        })
     }
 }

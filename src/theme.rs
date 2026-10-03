@@ -11,6 +11,7 @@ pub struct Theme {
     pub fg_active: Color,
     pub fg_muted: Color,
     pub border: Color,
+    pub error: Color,
 }
 
 impl Default for Theme {
@@ -23,6 +24,7 @@ impl Default for Theme {
             fg_active: Color::Rgb(3, 253, 145),
             fg_muted: Color::Rgb(136, 136, 136),
             border: Color::Rgb(136, 136, 136),
+            error: Color::Rgb(255, 56, 100),
         }
     }
 }

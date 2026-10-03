@@ -3,7 +3,7 @@ use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
 use ratatui::Frame;
 use ratatui::crossterm::event::Event;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::Paragraph;
 
 pub struct InitScreen {}
@@ -15,7 +15,7 @@ impl Screen for InitScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&mut self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame, rect: Rect) {
         // let layout = Layout::vertical([
         //     Constraint::Fill(1),
         //     Constraint::Length(1),

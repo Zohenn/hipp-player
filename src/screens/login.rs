@@ -5,7 +5,7 @@ use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding, Paragraph};
@@ -87,12 +87,10 @@ impl Screen for LoginScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&mut self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame, render_area: Rect) {
         let theme = get_app_theme();
 
-        let content_area = frame
-            .area()
-            .centered(Constraint::Max(50), Constraint::Length(14));
+        let content_area = render_area.centered(Constraint::Max(50), Constraint::Length(14));
         let [dialog, hint] = content_area.layout(&Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),

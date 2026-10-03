@@ -2,9 +2,8 @@ use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::backup::DatabaseBackup;
 use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
-use crate::dbg_file;
 use crate::domain::login::LoginEvent;
-use crate::domain::player::{PlaybackState, PlayerEvent, PlayerState};
+use crate::domain::player::PlayerEvent;
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -15,10 +14,12 @@ use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crate::ui::control::{ControlStyle, set_default_style};
 use crate::ui::overlay::{AppOverlay, Overlay};
+use crate::ui::player::render_player;
 use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
 use ratatui::widgets::Block;
 use ratatui_image::picker::Picker;
@@ -33,7 +34,7 @@ pub struct App {
     active_screen: Box<dyn Screen>,
     overlay: Option<AppOverlay>,
     picker: Picker,
-    player_state: Option<PlayerState>,
+    set_up: bool,
 }
 
 impl App {
@@ -61,7 +62,7 @@ impl App {
             active_screen: Box::new(InitScreen {}),
             overlay: None,
             picker,
-            player_state: None,
+            set_up: true,
             // overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
         })
     }
@@ -92,7 +93,17 @@ impl App {
                 _ = interval.tick() => {
                     terminal.draw(|frame| {
                         frame.render_widget(Block::default().style(Style::default().bg(theme.bg_darker)), frame.area());
-                        self.active_screen.render(frame);
+                        if self.set_up {
+                            let [screen_area, player_area] = frame.area().layout(&Layout::vertical([
+                                Constraint::Fill(1),
+                                Constraint::Length(2),
+                            ]));
+                            self.active_screen.render(frame, screen_area);
+                            let player_state = self.service_container.player.snapshot();
+                            render_player(frame, player_area, player_state.as_ref());
+                        } else {
+                            self.active_screen.render(frame, frame.area());
+                        }
 
                         if let Some(overlay) = &self.overlay {
                             frame.render_widget(Overlay::new(overlay), frame.area());
@@ -124,6 +135,7 @@ impl App {
             self.active_screen = Box::new(self.home_screen());
         } else {
             self.active_screen = Box::new(LoginScreen::new());
+            self.set_up = false;
         }
 
         Ok(())
@@ -140,19 +152,22 @@ impl App {
                         self.overlay = None;
                         self.active_screen = Box::new(self.home_screen());
                         self.service_container.collection.sync(SyncKind::Full);
+                        self.set_up = true;
                     }
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },
             },
             AppEvent::CoverArt(_) => {}
-            AppEvent::Player(event) => match event {
-                PlayerEvent::Error(err) => self.overlay = Some(AppOverlay::error(Some(err))),
-                _ => {
-                    if let Err(err) = self.service_container.player.handle_event(event) {
-                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                    }
+            AppEvent::Player(event) => {
+                if let PlayerEvent::Error(err) | PlayerEvent::StreamFailed { error: err, .. } =
+                    &event
+                {
+                    self.overlay = Some(AppOverlay::error(Some(err.clone())));
                 }
-            },
+                if let Err(err) = self.service_container.player.handle_event(event) {
+                    self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                }
+            }
         }
     }
 
@@ -195,15 +210,9 @@ impl App {
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
                 Action::PlaySong(details) => {
-                    match self.service_container.player.play(details.song_id) {
-                        Err(e) => dbg_file!(format!("play error: {:#?}", e)),
-                        _ => {}
-                    };
-
-                    self.player_state = Some(PlayerState {
-                        details,
-                        playback_state: PlaybackState::Loading,
-                    });
+                    if let Err(err) = self.service_container.player.play(details) {
+                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                    }
                 }
                 Action::Quit => todo!(),
             }

@@ -3,11 +3,12 @@ use crate::domain::login::LoginAction;
 use crate::domain::player::PlayingSongDetails;
 use ratatui::Frame;
 use ratatui::crossterm::event::Event;
+use ratatui::layout::Rect;
 
 pub trait Screen {
     fn handle_input_event(&mut self, event: Event) -> Option<Action>;
     fn handle_async_event(&mut self, event: &AppEvent);
-    fn render(&mut self, frame: &mut Frame);
+    fn render(&mut self, frame: &mut Frame, render_area: Rect);
 }
 
 pub enum Action {

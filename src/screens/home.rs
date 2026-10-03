@@ -9,15 +9,16 @@ use chrono::Local;
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Margin, Rect};
-use ratatui::prelude::Layout;
-use ratatui::style::{Style, Stylize};
-use ratatui::text::{Line, Text};
+use ratatui::prelude::{HorizontalAlignment, Layout};
+use ratatui::style::{Style, Styled, Stylize};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, List, ListState, Padding, Paragraph, Row, Table, TableState,
 };
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{FontSize, Resize, StatefulImage};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub struct HomeScreen {
     collection: CollectionService,
@@ -117,7 +118,13 @@ impl Screen for HomeScreen {
                                             .albums
                                             .iter()
                                             .find(|album| album.id == open_album.album_id)
-                                            .map(|album| PlayingSongDetails::new(song, album))
+                                            .map(|album| {
+                                                PlayingSongDetails::new(
+                                                    song,
+                                                    artist_name(state, album.artist_id).to_string(),
+                                                    album,
+                                                )
+                                            })
                                     })
                                     .map(|details| Action::PlaySong(details));
                             }
@@ -147,7 +154,7 @@ impl Screen for HomeScreen {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame, render_area: Rect) {
         let Self {
             collection,
             picker,
@@ -159,6 +166,7 @@ impl Screen for HomeScreen {
         collection.with_state(|state| {
             render_state(
                 frame,
+                render_area,
                 state,
                 album_list,
                 open_album.as_mut(),
@@ -171,6 +179,7 @@ impl Screen for HomeScreen {
 
 fn render_state(
     frame: &mut Frame,
+    render_area: Rect,
     state: &CollectionState,
     album_list: &mut ListState,
     open_album: Option<&mut OpenAlbum>,
@@ -178,13 +187,15 @@ fn render_state(
     font_size: FontSize,
 ) {
     let theme = get_app_theme();
-    let screen_area = frame.area().inner(Margin::new(1, 1));
-    frame.render_widget(Block::new().bg(theme.bg), screen_area);
+    // let screen_area = frame.area().inner(Margin::new(1, 0));
 
-    let [main_area, sync_status_area] = screen_area.layout(&Layout::vertical([
+    let [top_bar_area, main_area] = render_area.layout(&Layout::vertical([
+        Constraint::Length(1),
         Constraint::Fill(1),
-        Constraint::Length(2),
     ]));
+
+    frame.render_widget(Block::new().bg(theme.bg), main_area);
+
     let [album_list_area, album_details_area] = main_area.layout(&Layout::horizontal([
         Constraint::Percentage(50),
         Constraint::Percentage(50),
@@ -227,20 +238,21 @@ fn render_state(
         &theme,
     );
 
-    let paragraph = match &state.sync_state {
+    let breadcrumb_line = Line::from("Library");
+    let sync_state_line = match &state.sync_state {
         Some(Ok(sync_state)) => match sync_state {
-            CollectionSyncState::Started => Paragraph::new("Collection sync started"),
+            CollectionSyncState::Started => Line::from("Collection sync started"),
             CollectionSyncState::Fetching {
                 artist,
                 album,
                 album_number,
                 album_count,
-            } => Paragraph::new(format!(
+            } => Line::from(format!(
                 "Album {album_number}/{album_count}: {artist} - {album}"
             )),
         },
-        Some(Err(err)) => Paragraph::new(err.as_str()),
-        None => Paragraph::new(match state.last_synced_at {
+        Some(Err(err)) => Line::from(err.as_str()).fg(theme.error),
+        None => Line::from(match state.last_synced_at {
             Some(last_synced_at) => format!(
                 "Last synced {}",
                 last_synced_at
@@ -251,13 +263,25 @@ fn render_state(
         }),
     };
 
+    let [breadcrumb_area, sync_state_area] = top_bar_area.layout(
+        &Layout::horizontal([
+            Constraint::Length(breadcrumb_line.width() as u16),
+            Constraint::Length(sync_state_line.width() as u16),
+        ])
+        .flex(Flex::SpaceBetween),
+    );
+
+    frame.render_widget(breadcrumb_line, breadcrumb_area);
+
+    let status_paragraph_style = Styled::style(&sync_state_line);
     frame.render_widget(
-        paragraph.block(
-            Block::new()
-                .borders(Borders::TOP)
-                .border_style(Style::new().fg(theme.border)),
-        ),
-        sync_status_area,
+        // paragraph.block(
+        //     Block::new()
+        //         .borders(Borders::TOP)
+        //         .border_style(Style::new().fg(theme.border)),
+        // ),
+        sync_state_line.fg(status_paragraph_style.fg.unwrap_or(theme.fg_muted)),
+        sync_state_area,
     );
 }
 

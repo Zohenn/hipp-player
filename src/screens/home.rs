@@ -1,6 +1,7 @@
 use crate::domain::AppEvent;
 use crate::domain::collection::{CollectionService, CollectionState, CollectionSyncState};
 use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
+use crate::domain::player::PlayingSongDetails;
 use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
@@ -109,7 +110,16 @@ impl Screen for HomeScreen {
                         if let Some(index) = open_album.song_table.selected() {
                             let song = open_album.songs.as_ref().map(|songs| songs.get(index)).ok();
                             if let Some(Some(song)) = song {
-                                return Some(Action::PlaySong(song.id));
+                                return self
+                                    .collection
+                                    .with_state(|state| {
+                                        state
+                                            .albums
+                                            .iter()
+                                            .find(|album| album.id == open_album.album_id)
+                                            .map(|album| PlayingSongDetails::new(song, album))
+                                    })
+                                    .map(|details| Action::PlaySong(details));
                             }
                         }
                     }

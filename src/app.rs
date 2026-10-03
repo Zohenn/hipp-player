@@ -4,7 +4,7 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
 use crate::dbg_file;
 use crate::domain::login::LoginEvent;
-use crate::domain::player::PlayerEvent;
+use crate::domain::player::{PlaybackState, PlayerEvent, PlayerState};
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -33,6 +33,7 @@ pub struct App {
     active_screen: Box<dyn Screen>,
     overlay: Option<AppOverlay>,
     picker: Picker,
+    player_state: Option<PlayerState>,
 }
 
 impl App {
@@ -60,6 +61,7 @@ impl App {
             active_screen: Box::new(InitScreen {}),
             overlay: None,
             picker,
+            player_state: None,
             // overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
         })
     }
@@ -192,11 +194,16 @@ impl App {
                     self.service_container.login.handle_action(login_action)
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
-                Action::PlaySong(song_id) => {
-                    match self.service_container.player.play(song_id) {
+                Action::PlaySong(details) => {
+                    match self.service_container.player.play(details.song_id) {
                         Err(e) => dbg_file!(format!("play error: {:#?}", e)),
                         _ => {}
                     };
+
+                    self.player_state = Some(PlayerState {
+                        details,
+                        playback_state: PlaybackState::Loading,
+                    });
                 }
                 Action::Quit => todo!(),
             }

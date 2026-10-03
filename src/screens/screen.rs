@@ -1,5 +1,6 @@
 use crate::domain::AppEvent;
 use crate::domain::login::LoginAction;
+use crate::domain::player::PlayingSongDetails;
 use ratatui::Frame;
 use ratatui::crossterm::event::Event;
 
@@ -12,6 +13,6 @@ pub trait Screen {
 pub enum Action {
     Login(LoginAction),
     SwitchScreen(Box<dyn Screen>),
-    PlaySong(i64),
+    PlaySong(PlayingSongDetails),
     Quit,
 }

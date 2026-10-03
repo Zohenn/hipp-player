@@ -2,7 +2,9 @@ use crate::data::log_error;
 use crate::database::core::database::Database;
 use crate::database::song::SongRepository;
 use crate::domain::AppEvent;
+use crate::domain::album::Album;
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
+use crate::domain::song::Song;
 use crate::domain::source::SourceKind;
 use crate::open_subsonic::OpenSubsonicClient;
 use color_eyre::Result;
@@ -10,6 +12,7 @@ use color_eyre::eyre::eyre;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 use std::io::BufReader;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Clone)]
@@ -22,11 +25,43 @@ pub struct PlayerService {
 }
 
 pub enum PlayerEvent {
-    Ready {
+    FileReady {
         request_id: u64,
         file: std::fs::File,
     },
+    PlaybackStateUpdate(PlaybackState),
     Error(String),
+}
+
+pub struct PlayingSongDetails {
+    pub song_id: i64,
+    pub song_title: String,
+    pub song_duration: i64,
+    pub album_id: i64,
+    pub album_title: String,
+}
+
+impl PlayingSongDetails {
+    pub fn new(song: &Song, album: &Album) -> Self {
+        Self {
+            song_id: song.id,
+            song_title: song.title.clone(),
+            song_duration: song.duration_seconds,
+            album_id: album.id,
+            album_title: song.title.clone(),
+        }
+    }
+}
+
+pub enum PlaybackState {
+    Loading,
+    Playing(Duration),
+    Paused(Duration),
+}
+
+pub struct PlayerState {
+    pub details: PlayingSongDetails,
+    pub playback_state: PlaybackState,
 }
 
 impl PlayerService {
@@ -64,15 +99,15 @@ impl PlayerService {
 
     pub fn handle_event(&mut self, event: PlayerEvent) -> Result<()> {
         match event {
-            PlayerEvent::Ready { request_id, file } => {
+            PlayerEvent::FileReady { request_id, file } => {
                 if request_id != self.current_request {
                     return Ok(());
                 }
 
                 self.play_from_file(file)
             }
-            PlayerEvent::Error(_) => {
-                // we don't care about error events here
+            _ => {
+                // we don't care about other events here
                 Ok(())
             }
         }
@@ -88,9 +123,10 @@ impl PlayerService {
 
         tokio::spawn(async move {
             let send_result = match streaming_service.stream_song(&subsonic_id).await {
-                Ok(file) => {
-                    event_tx.send(AppEvent::Player(PlayerEvent::Ready { request_id, file }))
-                }
+                Ok(file) => event_tx.send(AppEvent::Player(PlayerEvent::FileReady {
+                    request_id,
+                    file,
+                })),
                 Err(err) => {
                     event_tx.send(AppEvent::Player(PlayerEvent::Error(format!("{:#}", err))))
                 }
@@ -117,6 +153,11 @@ impl PlayerService {
 
         player.set_volume(0.5);
         player.play();
+
+        self.event_tx
+            .send(AppEvent::Player(PlayerEvent::PlaybackStateUpdate(
+                PlaybackState::Playing(Duration::ZERO),
+            )))?;
 
         Ok(())
     }

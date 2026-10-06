@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 pub struct Theme {
     pub bg: Color,
+    pub bg_lighter: Color,
     pub bg_darker: Color,
     pub fg: Color,
-    pub fg_active: Color,
+    pub primary: Color,
     pub fg_muted: Color,
     pub border: Color,
     pub error: Color,
@@ -19,9 +20,10 @@ impl Default for Theme {
         let bg = Color::Rgb(29, 37, 33);
         Self {
             bg,
+            bg_lighter: Color::Rgb(45, 58, 52),
             bg_darker: bg.darken(0.02),
             fg: Color::Rgb(255, 255, 255),
-            fg_active: Color::Rgb(3, 253, 145),
+            primary: Color::Rgb(3, 253, 145),
             fg_muted: Color::Rgb(136, 136, 136),
             border: Color::Rgb(136, 136, 136),
             error: Color::Rgb(255, 56, 100),

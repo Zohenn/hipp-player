@@ -26,6 +26,8 @@ pub struct PlayerService {
     // `current_request` while the next song is still being fetched.
     loaded_request: u64,
     current_song: Option<PlayingSongDetails>,
+    // Volume in percent
+    volume: u8,
 }
 
 pub enum PlayerEvent {
@@ -73,6 +75,7 @@ pub enum PlaybackState {
 pub struct PlayerState<'a> {
     pub details: &'a PlayingSongDetails,
     pub playback_state: PlaybackState,
+    pub volume: u8,
 }
 
 impl PlayerService {
@@ -89,6 +92,7 @@ impl PlayerService {
             current_request: 0,
             loaded_request: 0,
             current_song: None,
+            volume: 20,
         }
     }
 
@@ -176,7 +180,7 @@ impl PlayerService {
         player.clear();
         player.append(rodio::decoder::Decoder::new(BufReader::new(file))?);
 
-        player.set_volume(0.2);
+        player.set_volume(volume_to_gain(self.volume));
         player.play();
         self.loaded_request = request_id;
 
@@ -200,6 +204,43 @@ impl PlayerService {
         Some(PlayerState {
             details,
             playback_state,
+            volume: self.volume,
         })
     }
+
+    pub fn toggle_playback(&mut self) {
+        if let Some((_, player)) = self.sink.lock().unwrap().as_mut() {
+            if player.empty() {
+                return;
+            }
+
+            if player.is_paused() {
+                player.play();
+            } else {
+                player.pause();
+            }
+        }
+    }
+
+    pub fn increase_volume(&mut self) {
+        self.set_volume(self.volume.saturating_add(VOLUME_STEP).min(MAX_VOLUME));
+    }
+
+    pub fn decrease_volume(&mut self) {
+        self.set_volume(self.volume.saturating_sub(VOLUME_STEP));
+    }
+
+    fn set_volume(&mut self, volume: u8) {
+        self.volume = volume;
+        if let Some((_, player)) = self.sink.lock().unwrap().as_mut() {
+            player.set_volume(volume_to_gain(volume));
+        }
+    }
+}
+
+const VOLUME_STEP: u8 = 5;
+const MAX_VOLUME: u8 = 120;
+
+fn volume_to_gain(volume: u8) -> f32 {
+    volume as f32 / 100.0
 }

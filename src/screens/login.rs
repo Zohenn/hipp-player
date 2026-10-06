@@ -1,5 +1,6 @@
 use crate::domain::AppEvent;
 use crate::domain::login::{LoginAction, LoginParams};
+use crate::domain::player::PlayingSongDetails;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
@@ -87,7 +88,12 @@ impl Screen for LoginScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&mut self, frame: &mut Frame, render_area: Rect) {
+    fn render(
+        &mut self,
+        frame: &mut Frame,
+        render_area: Rect,
+        _now_playing: Option<&PlayingSongDetails>,
+    ) {
         let theme = get_app_theme();
 
         let content_area = render_area.centered(Constraint::Max(50), Constraint::Length(14));
@@ -126,9 +132,9 @@ impl Screen for LoginScreen {
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(theme.fg_active)),
+                Span::styled("↑↓", Style::default().fg(theme.primary)),
                 " Change focus  ".into(),
-                Span::styled("Enter", Style::default().fg(theme.fg_active)),
+                Span::styled("Enter", Style::default().fg(theme.primary)),
                 " Submit".into(),
             ]))
             .block(Block::default().padding(Padding::horizontal(1))),

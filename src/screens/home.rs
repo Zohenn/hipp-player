@@ -5,6 +5,7 @@ use crate::domain::player::PlayingSongDetails;
 use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
+use crate::ui::keybinding::format_keybinding;
 use chrono::Local;
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
@@ -12,9 +13,7 @@ use ratatui::layout::{Constraint, Flex, Margin, Rect};
 use ratatui::prelude::{HorizontalAlignment, Layout};
 use ratatui::style::{Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{
-    Block, Borders, List, ListState, Padding, Paragraph, Row, Table, TableState,
-};
+use ratatui::widgets::{Block, List, ListState, Padding, Paragraph, Row, Table, TableState};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{FontSize, Resize, StatefulImage};
@@ -154,7 +153,12 @@ impl Screen for HomeScreen {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, render_area: Rect) {
+    fn render(
+        &mut self,
+        frame: &mut Frame,
+        render_area: Rect,
+        now_playing: Option<&PlayingSongDetails>,
+    ) {
         let Self {
             collection,
             picker,
@@ -172,6 +176,7 @@ impl Screen for HomeScreen {
                 open_album.as_mut(),
                 *focus,
                 picker.font_size(),
+                now_playing,
             )
         });
     }
@@ -185,21 +190,27 @@ fn render_state(
     open_album: Option<&mut OpenAlbum>,
     focus: Focus,
     font_size: FontSize,
+    now_playing: Option<&PlayingSongDetails>,
 ) {
     let theme = get_app_theme();
-    // let screen_area = frame.area().inner(Margin::new(1, 0));
 
     let [top_bar_area, main_area] = render_area.layout(&Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
     ]));
 
-    frame.render_widget(Block::new().bg(theme.bg), main_area);
-
-    let [album_list_area, album_details_area] = main_area.layout(&Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ]));
+    let (details_width, gap) = if open_album.is_some() {
+        (50, 1)
+    } else {
+        (0, 0)
+    };
+    let [album_list_area, album_details_area] = main_area.layout(
+        &Layout::horizontal([
+            Constraint::Percentage(100 - details_width),
+            Constraint::Percentage(details_width),
+        ])
+        .spacing(gap),
+    );
 
     clamp_selection(
         album_list,
@@ -214,13 +225,26 @@ fn render_state(
     frame.render_stateful_widget(
         List::new(state.albums.iter().enumerate().map(|(index, album)| {
             let name_fg = if selected == Some(index) {
-                theme.fg_active
+                theme.primary
             } else {
                 theme.fg
             };
+            // Every album gets the gutter so names stay aligned; only the
+            // playing one has the accent bar in it.
+            let gutter = if now_playing.is_some_and(|song| song.album_id == album.id) {
+                Span::from(PLAYING_ALBUM_BAR).fg(theme.primary)
+            } else {
+                Span::from(" ".repeat(PLAYING_ALBUM_BAR.width()))
+            };
             Text::from(vec![
-                Line::from(album.name.as_str()).fg(name_fg),
-                Line::from(artist_name(state, album.artist_id)).fg(theme.fg_muted),
+                Line::from(vec![
+                    gutter.clone(),
+                    Span::from(album.name.as_str()).fg(name_fg),
+                ]),
+                Line::from(vec![
+                    gutter,
+                    Span::from(artist_name(state, album.artist_id)).fg(theme.fg_muted),
+                ]),
             ])
         }))
         .style(Style::new().bg(theme.bg)),
@@ -235,10 +259,11 @@ fn render_state(
         open_album,
         focus == Focus::Songs,
         font_size,
+        now_playing,
         &theme,
     );
 
-    let breadcrumb_line = Line::from("Library");
+    let breadcrumb_line = Line::from_iter(format_keybinding("1", Some("Library")));
     let sync_state_line = match &state.sync_state {
         Some(Ok(sync_state)) => match sync_state {
             CollectionSyncState::Started => Line::from("Collection sync started"),
@@ -275,11 +300,6 @@ fn render_state(
 
     let status_paragraph_style = Styled::style(&sync_state_line);
     frame.render_widget(
-        // paragraph.block(
-        //     Block::new()
-        //         .borders(Borders::TOP)
-        //         .border_style(Style::new().fg(theme.border)),
-        // ),
         sync_state_line.fg(status_paragraph_style.fg.unwrap_or(theme.fg_muted)),
         sync_state_area,
     );
@@ -292,12 +312,10 @@ fn render_album_details(
     open_album: Option<&mut OpenAlbum>,
     focused: bool,
     font_size: FontSize,
+    now_playing: Option<&PlayingSongDetails>,
     theme: &Theme,
 ) {
-    let block = Block::new()
-        .borders(Borders::LEFT)
-        .border_style(Style::new().fg(theme.border))
-        .padding(Padding::horizontal(1));
+    let block = Block::new().bg(theme.bg).padding(Padding::horizontal(1));
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
@@ -361,18 +379,22 @@ fn render_album_details(
         Table::new(
             songs.iter().enumerate().map(|(index, song)| {
                 let title_fg = if selected == Some(index) {
-                    theme.fg_active
+                    theme.primary
                 } else {
                     theme.fg
                 };
-                Row::new([
+                let track_line = if now_playing.is_some_and(|playing| playing.song_id == song.id) {
+                    Line::from(NOW_PLAYING_MARKER).fg(theme.primary)
+                } else {
                     Line::from(
                         song.track_number
                             .map(|track| track.to_string())
                             .unwrap_or_default(),
                     )
                     .fg(theme.fg_muted)
-                    .right_aligned(),
+                };
+                Row::new([
+                    track_line.right_aligned(),
                     Line::from(song.title.as_str()).fg(title_fg),
                     Line::from(format_duration(song.duration_seconds))
                         .fg(theme.fg_muted)
@@ -437,6 +459,9 @@ fn clamp_selection<S>(
         _ => {}
     }
 }
+
+const NOW_PLAYING_MARKER: &str = "▸";
+const PLAYING_ALBUM_BAR: &str = "▎ ";
 
 fn artist_name(state: &CollectionState, artist_id: i64) -> &str {
     state

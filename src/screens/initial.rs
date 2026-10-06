@@ -1,4 +1,5 @@
 use crate::domain::AppEvent;
+use crate::domain::player::PlayingSongDetails;
 use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
 use ratatui::Frame;
@@ -15,7 +16,7 @@ impl Screen for InitScreen {
 
     fn handle_async_event(&mut self, event: &AppEvent) {}
 
-    fn render(&mut self, frame: &mut Frame, rect: Rect) {
+    fn render(&mut self, frame: &mut Frame, rect: Rect, _now_playing: Option<&PlayingSongDetails>) {
         // let layout = Layout::vertical([
         //     Constraint::Fill(1),
         //     Constraint::Length(1),

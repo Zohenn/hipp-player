@@ -19,7 +19,7 @@ use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Margin};
 use ratatui::style::Style;
 use ratatui::widgets::Block;
 use ratatui_image::picker::Picker;
@@ -84,7 +84,7 @@ impl App {
             ControlStyle::default()
                 .bg(theme.bg)
                 .bg_darker(theme.bg_darker)
-                .focused(theme.fg_active)
+                .focused(theme.primary)
                 .unfocused(theme.fg),
         );
 
@@ -96,13 +96,17 @@ impl App {
                         if self.set_up {
                             let [screen_area, player_area] = frame.area().layout(&Layout::vertical([
                                 Constraint::Fill(1),
-                                Constraint::Length(2),
+                                Constraint::Length(3),
                             ]));
-                            self.active_screen.render(frame, screen_area);
                             let player_state = self.service_container.player.snapshot();
-                            render_player(frame, player_area, player_state.as_ref());
+                            self.active_screen.render(
+                                frame,
+                                screen_area.inner(Margin::new(1, 1)),
+                                player_state.as_ref().map(|state| state.details),
+                            );
+                            render_player(frame, player_area.inner(Margin::new(1, 0)), player_state.as_ref());
                         } else {
-                            self.active_screen.render(frame, frame.area());
+                            self.active_screen.render(frame, frame.area(), None);
                         }
 
                         if let Some(overlay) = &self.overlay {
@@ -184,6 +188,21 @@ impl App {
             match key.code {
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                     self.should_quit = true;
+                }
+                KeyCode::Char(' ') if self.set_up => {
+                    self.service_container.player.toggle_playback();
+
+                    return;
+                }
+                KeyCode::Char('-') | KeyCode::Char('_') if self.set_up => {
+                    self.service_container.player.decrease_volume();
+
+                    return;
+                }
+                KeyCode::Char('=') | KeyCode::Char('+') if self.set_up => {
+                    self.service_container.player.increase_volume();
+
+                    return;
                 }
                 _ => {}
             }

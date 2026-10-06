@@ -8,7 +8,12 @@ use ratatui::layout::Rect;
 pub trait Screen {
     fn handle_input_event(&mut self, event: Event) -> Option<Action>;
     fn handle_async_event(&mut self, event: &AppEvent);
-    fn render(&mut self, frame: &mut Frame, render_area: Rect);
+    fn render(
+        &mut self,
+        frame: &mut Frame,
+        render_area: Rect,
+        now_playing: Option<&PlayingSongDetails>,
+    );
 }
 
 pub enum Action {

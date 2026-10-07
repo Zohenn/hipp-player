@@ -52,7 +52,7 @@ impl<'a> Widget for Overlay<'a> {
 
         match self.overlay {
             AppOverlay::Loading(options) => {
-                render_overlay(shadow_area, buf);
+                dim_area(shadow_area, buf);
                 Paragraph::new(
                     options
                         .text
@@ -64,7 +64,7 @@ impl<'a> Widget for Overlay<'a> {
                 .render(view_area, buf);
             }
             AppOverlay::Error(err) => {
-                render_overlay(shadow_area, buf);
+                dim_area(shadow_area, buf);
                 Paragraph::new(Line::from(
                     &[
                         "Error: ",
@@ -81,7 +81,7 @@ impl<'a> Widget for Overlay<'a> {
     }
 }
 
-fn render_overlay(area: Rect, buf: &mut Buffer) {
+pub fn dim_area(area: Rect, buf: &mut Buffer) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             if let Color::Rgb(r, g, b) = buf[(x, y)].fg {

@@ -4,6 +4,7 @@ use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
 use crate::domain::login::{LoginEvent, LoginService};
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
 use crate::domain::player::{PlayerEvent, PlayerService};
+use crate::domain::queue::QueueService;
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
 use color_eyre::Result;
 use tokio::sync::mpsc::UnboundedSender;
@@ -16,6 +17,7 @@ pub mod cover_art;
 pub mod login;
 pub mod open_subsonic_streaming;
 pub mod player;
+pub mod queue;
 pub mod song;
 pub mod source;
 pub mod sync_run;
@@ -33,6 +35,7 @@ pub struct ServiceContainer {
     pub collection: CollectionService,
     pub cover_art: CoverArtService,
     pub player: PlayerService,
+    pub queue: QueueService,
 }
 
 impl ServiceContainer {
@@ -45,10 +48,11 @@ impl ServiceContainer {
             collection: CollectionService::new(database.clone(), client.clone()),
             cover_art: CoverArtService::new(database.clone(), client.clone(), event_tx.clone())?,
             player: PlayerService::new(
-                database,
+                database.clone(),
                 OpenSubsonicStreamingService::new(client)?,
                 event_tx,
             ),
+            queue: QueueService::new(database),
         })
     }
 

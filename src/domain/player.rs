@@ -9,7 +9,9 @@ use crate::domain::source::SourceKind;
 use crate::open_subsonic::OpenSubsonicClient;
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
+use rodio::source::EmptyCallback;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
+use serde::Deserialize;
 use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -39,10 +41,13 @@ pub enum PlayerEvent {
         request_id: u64,
         error: String,
     },
+    Finished {
+        request_id: u64,
+    },
     Error(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct PlayingSongDetails {
     pub song_id: i64,
     pub song_title: String,
@@ -118,6 +123,18 @@ impl PlayerService {
         Ok(())
     }
 
+    /// Shows a song as the current one without streaming it, e.g. one
+    /// restored from the persisted queue.
+    pub fn restore(&mut self, details: PlayingSongDetails) {
+        self.current_song = Some(details);
+    }
+
+    /// Whether a `Finished` event belongs to the song that's currently
+    /// playing, rather than one that has since been replaced.
+    pub fn is_current_request(&self, request_id: u64) -> bool {
+        request_id == self.current_request
+    }
+
     pub fn handle_event(&mut self, event: PlayerEvent) -> Result<()> {
         match event {
             PlayerEvent::FileReady { request_id, file } => {
@@ -137,7 +154,7 @@ impl PlayerService {
                 }
                 Ok(())
             }
-            PlayerEvent::Error(_) => Ok(()),
+            PlayerEvent::Finished { .. } | PlayerEvent::Error(_) => Ok(()),
         }
     }
 
@@ -179,6 +196,13 @@ impl PlayerService {
         let (_, player) = guard.as_ref().unwrap();
         player.clear();
         player.append(rodio::decoder::Decoder::new(BufReader::new(file))?);
+        let event_tx = self.event_tx.clone();
+        player.append(EmptyCallback::new(Box::new(move || {
+            if let Err(err) = event_tx.send(AppEvent::Player(PlayerEvent::Finished { request_id }))
+            {
+                log_error(err);
+            }
+        })));
 
         player.set_volume(volume_to_gain(self.volume));
         player.play();
@@ -197,7 +221,9 @@ impl PlayerService {
                 Some((_, player)) if player.empty() => PlaybackState::Stopped,
                 Some((_, player)) if player.is_paused() => PlaybackState::Paused(player.get_pos()),
                 Some((_, player)) => PlaybackState::Playing(player.get_pos()),
-                None => PlaybackState::Loading,
+                // Nothing has been streamed yet, e.g. a song restored from
+                // the queue.
+                None => PlaybackState::Stopped,
             }
         };
 
@@ -208,18 +234,31 @@ impl PlayerService {
         })
     }
 
-    pub fn toggle_playback(&mut self) {
-        if let Some((_, player)) = self.sink.lock().unwrap().as_mut() {
-            if player.empty() {
-                return;
-            }
-
+    pub fn toggle_playback(&mut self) -> Result<()> {
+        // Only toggles once the current song is in the sink, otherwise the
+        // previous song would resume while the next one is fetched.
+        if self.loaded_request == self.current_request
+            && let Some((_, player)) = self.sink.lock().unwrap().as_mut()
+            && !player.empty()
+        {
             if player.is_paused() {
                 player.play();
             } else {
                 player.pause();
             }
+
+            return Ok(());
         }
+
+        // Nothing loaded — a restored song, or the last one has finished, so
+        // play the current song from the start.
+        if self.loaded_request == self.current_request
+            && let Some(details) = self.current_song.clone()
+        {
+            return self.play(details);
+        }
+
+        Ok(())
     }
 
     pub fn increase_volume(&mut self) {

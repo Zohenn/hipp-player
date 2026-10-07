@@ -5,6 +5,7 @@ use crate::domain::player::PlayingSongDetails;
 use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
+use crate::ui::common::{PLAYING_ALBUM_BAR, clamp_selection, format_duration};
 use crate::ui::keybinding::format_keybinding;
 use chrono::Local;
 use crossterm::event::{Event, KeyCode};
@@ -107,26 +108,17 @@ impl Screen for HomeScreen {
                     KeyCode::Down => open_album.song_table.select_next(),
                     KeyCode::Left => self.focus = Focus::Albums,
                     KeyCode::Enter => {
-                        if let Some(index) = open_album.song_table.selected() {
-                            let song = open_album.songs.as_ref().map(|songs| songs.get(index)).ok();
-                            if let Some(Some(song)) = song {
-                                return self
-                                    .collection
-                                    .with_state(|state| {
-                                        state
-                                            .albums
-                                            .iter()
-                                            .find(|album| album.id == open_album.album_id)
-                                            .map(|album| {
-                                                PlayingSongDetails::new(
-                                                    song,
-                                                    artist_name(state, album.artist_id).to_string(),
-                                                    album,
-                                                )
-                                            })
-                                    })
-                                    .map(|details| Action::PlaySong(details));
-                            }
+                        let start = open_album.song_table.selected()?;
+                        let entries = album_song_details(&self.collection, open_album)?;
+                        if start < entries.len() {
+                            return Some(Action::PlayQueue { entries, start });
+                        }
+                    }
+                    KeyCode::Char('a') => {
+                        let index = open_album.song_table.selected()?;
+                        let mut entries = album_song_details(&self.collection, open_album)?;
+                        if index < entries.len() {
+                            return Some(Action::Enqueue(entries.swap_remove(index)));
                         }
                     }
                     _ => {}
@@ -444,37 +436,32 @@ fn render_cover(
     }
 }
 
-/// `select_next`/`select_previous` can leave the selection past the end
-/// (e.g. `usize::MAX` from Up with nothing selected), and highlighting is
-/// computed before the widget renders, so it has to be clamped up front.
-fn clamp_selection<S>(
-    state: &mut S,
-    selected: fn(&S) -> Option<usize>,
-    select: fn(&mut S, Option<usize>),
-    len: usize,
-) {
-    match selected(state) {
-        Some(_) if len == 0 => select(state, None),
-        Some(index) if index >= len => select(state, Some(len - 1)),
-        _ => {}
-    }
+/// `None` if the songs failed to load or the album is gone from state.
+fn album_song_details(
+    collection: &CollectionService,
+    open_album: &OpenAlbum,
+) -> Option<Vec<PlayingSongDetails>> {
+    let songs = open_album.songs.as_ref().ok()?;
+    collection.with_state(|state| {
+        let album = state
+            .albums
+            .iter()
+            .find(|album| album.id == open_album.album_id)?;
+        let artist_name = artist_name(state, album.artist_id);
+        Some(
+            songs
+                .iter()
+                .map(|song| PlayingSongDetails::new(song, artist_name.to_string(), album))
+                .collect(),
+        )
+    })
 }
 
 const NOW_PLAYING_MARKER: &str = "▸";
-const PLAYING_ALBUM_BAR: &str = "▎ ";
 
 fn artist_name(state: &CollectionState, artist_id: i64) -> &str {
     state
         .artists
         .get(&artist_id)
         .map_or("", |artist| artist.name.as_str())
-}
-
-fn format_duration(seconds: i64) -> String {
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
 }

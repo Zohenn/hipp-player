@@ -19,6 +19,11 @@ pub trait Screen {
 pub enum Action {
     Login(LoginAction),
     SwitchScreen(Box<dyn Screen>),
-    PlaySong(PlayingSongDetails),
+    /// Replaces the queue and plays `entries[start]`.
+    PlayQueue {
+        entries: Vec<PlayingSongDetails>,
+        start: usize,
+    },
+    Enqueue(PlayingSongDetails),
     Quit,
 }

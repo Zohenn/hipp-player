@@ -2,7 +2,14 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::DatabaseMigration;
 
 pub fn get_available_migrations() -> Vec<DatabaseMigration> {
-    vec![version1(), version2(), version3(), version4(), version5()]
+    vec![
+        version1(),
+        version2(),
+        version3(),
+        version4(),
+        version5(),
+        version6(),
+    ]
 }
 
 fn version1() -> DatabaseMigration {
@@ -178,6 +185,32 @@ JOIN albums ON albums.id = album_links.album_id
 WHERE albums.cover_art IS NOT NULL AND albums.cover_art != '';
 
 ALTER TABLE albums DROP COLUMN cover_art;
+
+COMMIT;
+",
+        )?;
+
+        Ok(())
+    })
+}
+
+fn version6() -> DatabaseMigration {
+    DatabaseMigration::new("Play queue".into(), 6, |database: &Database| {
+        // Positions are rewritten whenever the queue changes, so they're
+        // always 0..n. Only the current entry is kept, not playback progress.
+        database.connection()?.execute_batch(
+            "\
+BEGIN;
+
+CREATE TABLE queue (
+    position INTEGER PRIMARY KEY,
+    song_id INTEGER NOT NULL REFERENCES songs(id)
+);
+
+CREATE TABLE queue_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    current_position INTEGER
+);
 
 COMMIT;
 ",

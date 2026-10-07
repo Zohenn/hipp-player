@@ -3,7 +3,7 @@ use crate::database::core::backup::DatabaseBackup;
 use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
 use crate::domain::login::LoginEvent;
-use crate::domain::player::PlayerEvent;
+use crate::domain::player::{PlayerEvent, PlayingSongDetails};
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -15,6 +15,7 @@ use crate::theme::get_app_theme;
 use crate::ui::control::{ControlStyle, set_default_style};
 use crate::ui::overlay::{AppOverlay, Overlay};
 use crate::ui::player::render_player;
+use crate::ui::queue::{QueueView, QueueViewAction, render_queue};
 use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
@@ -33,6 +34,7 @@ pub struct App {
     service_container: ServiceContainer,
     active_screen: Box<dyn Screen>,
     overlay: Option<AppOverlay>,
+    queue_view: Option<QueueView>,
     picker: Picker,
     set_up: bool,
 }
@@ -61,6 +63,7 @@ impl App {
             service_container: ServiceContainer::new(database, event_tx)?,
             active_screen: Box::new(InitScreen {}),
             overlay: None,
+            queue_view: None,
             picker,
             set_up: true,
             // overlay: Some(AppOverlay::error(Some("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec ultricies mattis luctus. Maecenas interdum, purus et mollis finibus, nisl purus dapibus diam, pretium euismod justo lectus non enim. Mauris consectetur, felis a auctor pulvinar, enim purus porta nunc, laoreet tempus diam neque vitae tellus. Suspendisse potenti. Vestibulum lorem erat, accumsan ac magna sit amet, tincidunt tristique neque. Praesent fringilla tellus quis laoreet eleifend. Mauris non lorem a lorem malesuada elementum.".into()))),
@@ -104,7 +107,26 @@ impl App {
                                 screen_area.inner(Margin::new(1, 1)),
                                 player_state.as_ref().map(|state| state.details),
                             );
-                            render_player(frame, player_area.inner(Margin::new(1, 0)), player_state.as_ref());
+                            let queue = &self.service_container.queue;
+                            let queue_position = queue
+                                .current()
+                                .map(|(index, _)| (index + 1, queue.entries().len()));
+                            frame.render_widget(Block::default().style(Style::default().bg(theme.bg)), player_area);
+                            render_player(
+                                frame,
+                                player_area.inner(Margin::new(1, 0)),
+                                player_state.as_ref(),
+                                queue_position,
+                            );
+                            if let Some(queue_view) = &mut self.queue_view {
+                                render_queue(
+                                    frame,
+                                    screen_area,
+                                    queue_view,
+                                    queue.entries(),
+                                    queue.current().map(|(index, _)| index),
+                                );
+                            }
                         } else {
                             self.active_screen.render(frame, frame.area(), None);
                         }
@@ -133,6 +155,10 @@ impl App {
                     client_config.password,
                 )));
             self.service_container.collection.load_from_db()?;
+            self.service_container.queue.load_from_db()?;
+            if let Some((_, details)) = self.service_container.queue.current() {
+                self.service_container.player.restore(details.clone());
+            }
             if let Some(kind) = self.service_container.collection.due_sync()? {
                 self.service_container.collection.sync(kind);
             }
@@ -168,10 +194,32 @@ impl App {
                 {
                     self.overlay = Some(AppOverlay::error(Some(err.clone())));
                 }
+                if let PlayerEvent::Finished { request_id } = &event
+                    && self
+                        .service_container
+                        .player
+                        .is_current_request(*request_id)
+                {
+                    let next = self.service_container.queue.next();
+                    self.play(next);
+                }
                 if let Err(err) = self.service_container.player.handle_event(event) {
                     self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
                 }
             }
+        }
+    }
+
+    /// Takes the result of a queue operation; `None` means there was nothing
+    /// to move to, so the current song is left alone.
+    fn play(&mut self, details: Result<Option<PlayingSongDetails>>) {
+        let result = match details {
+            Ok(Some(details)) => self.service_container.player.play(details),
+            Ok(None) => Ok(()),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = result {
+            self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
         }
     }
 
@@ -190,7 +238,34 @@ impl App {
                     self.should_quit = true;
                 }
                 KeyCode::Char(' ') if self.set_up => {
-                    self.service_container.player.toggle_playback();
+                    if let Err(err) = self.service_container.player.toggle_playback() {
+                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                    }
+
+                    return;
+                }
+                KeyCode::Char('q') if self.set_up => {
+                    self.queue_view = match self.queue_view {
+                        Some(_) => None,
+                        None => Some(QueueView::new(
+                            self.service_container
+                                .queue
+                                .current()
+                                .map(|(index, _)| index),
+                        )),
+                    };
+
+                    return;
+                }
+                KeyCode::Char('<') | KeyCode::Char(',') if self.set_up => {
+                    let previous = self.service_container.queue.previous();
+                    self.play(previous);
+
+                    return;
+                }
+                KeyCode::Char('>') | KeyCode::Char('.') if self.set_up => {
+                    let next = self.service_container.queue.next();
+                    self.play(next);
 
                     return;
                 }
@@ -221,6 +296,27 @@ impl App {
             _ => {}
         }
 
+        if let Some(queue_view) = &mut self.queue_view {
+            if let Some(key) = event.as_key_press_event() {
+                let len = self.service_container.queue.entries().len();
+                match queue_view.handle_key(key.code, len) {
+                    Some(QueueViewAction::Close) => self.queue_view = None,
+                    Some(QueueViewAction::Clear) => {
+                        if let Err(err) = self.service_container.queue.clear() {
+                            self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                        }
+                    }
+                    Some(QueueViewAction::Play(index)) => {
+                        let selected = self.service_container.queue.select(index);
+                        self.play(selected);
+                    }
+                    None => {}
+                }
+            }
+
+            return;
+        }
+
         if let Some(action) = self.active_screen.handle_input_event(event) {
             match action {
                 Action::Login(login_action) => {
@@ -228,8 +324,12 @@ impl App {
                     self.service_container.login.handle_action(login_action)
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
-                Action::PlaySong(details) => {
-                    if let Err(err) = self.service_container.player.play(details) {
+                Action::PlayQueue { entries, start } => {
+                    let current = self.service_container.queue.replace(entries, start);
+                    self.play(current);
+                }
+                Action::Enqueue(details) => {
+                    if let Err(err) = self.service_container.queue.append(details) {
                         self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
                     }
                 }

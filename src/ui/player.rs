@@ -9,7 +9,13 @@ use std::iter;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub fn render_player(frame: &mut Frame, render_area: Rect, player_state: Option<&PlayerState>) {
+/// `queue_position` is the 1-based current entry and the queue length.
+pub fn render_player(
+    frame: &mut Frame,
+    render_area: Rect,
+    player_state: Option<&PlayerState>,
+    queue_position: Option<(usize, usize)>,
+) {
     let theme = get_app_theme();
 
     let [title_area, progress_area, playback_details_area] =
@@ -19,8 +25,17 @@ pub fn render_player(frame: &mut Frame, render_area: Rect, player_state: Option<
             Constraint::Length(1),
         ]));
 
+    let queue_label = match queue_position {
+        Some((position, len)) => format!(" {position}/{len}"),
+        None => String::new(),
+    };
     frame.render_widget(
-        Line::from_iter(format_keybinding("0", Some("Player"))),
+        Line::from_iter(
+            format_keybinding("0", Some("Player"))
+                .chain(iter::once(Span::from("  ")))
+                .chain(format_keybinding("q", Some("Queue")))
+                .chain(iter::once(Span::from(queue_label).fg(theme.fg_muted))),
+        ),
         title_area,
     );
 
@@ -93,7 +108,11 @@ pub fn render_player(frame: &mut Frame, render_area: Rect, player_state: Option<
                 "Play "
             };
             let volume = Line::from_iter(
-                format_keybinding("␣", Some(playback_label))
+                format_keybinding("<", None)
+                    .chain(iter::once(Span::from(" ")))
+                    .chain(format_keybinding("␣", Some(playback_label)))
+                    .chain(iter::once(Span::from(" ")))
+                    .chain(format_keybinding(">", None))
                     .chain(iter::once(Span::from("  ")))
                     .chain(format_keybinding("-", None))
                     .chain(iter::once(Span::from(format!(

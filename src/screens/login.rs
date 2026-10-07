@@ -22,9 +22,7 @@ impl LoginScreen {
     pub fn new() -> Self {
         Self {
             url: "https://bandcamp.com/api/subsonic".into(),
-            // username: ControlState::auto_focused(),
-            username: "P6NLRVILXPMV4J4DIWQCXG4HA5MJGYOY".into(),
-            password: "XH56Y5ZNWJO3MV3OB75MLDZVJ4YIT6LL".into(),
+            username: ControlState::auto_focused(),
             ..Default::default()
         }
     }

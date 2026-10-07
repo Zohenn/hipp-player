@@ -6,7 +6,7 @@ use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
 use crate::ui::common::{PLAYING_ALBUM_BAR, clamp_selection, format_duration};
-use crate::ui::keybinding::format_keybinding;
+use crate::ui::keybinding::{format_keybinding, format_keybinding_hints};
 use chrono::Local;
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
@@ -204,6 +204,25 @@ fn render_state(
         .spacing(gap),
     );
 
+    frame.render_widget(Block::new().bg(theme.bg), album_list_area);
+    let [album_list_area, _, album_list_footer_area] = album_list_area.layout(&Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ]));
+    // Only the focused panel's keys work, so only its hints are shown; the
+    // row stays reserved so the list doesn't jump when focus moves.
+    if focus == Focus::Albums {
+        let mut hints = vec![("↑↓", "Move"), ("⏎", "Open")];
+        if open_album.is_some() {
+            hints.push(("→", "Songs"));
+        }
+        frame.render_widget(
+            format_keybinding_hints(&hints),
+            album_list_footer_area.inner(Margin::new(PLAYING_ALBUM_BAR.width() as u16, 0)),
+        );
+    }
+
     clamp_selection(
         album_list,
         ListState::selected,
@@ -310,6 +329,23 @@ fn render_album_details(
     let block = Block::new().bg(theme.bg).padding(Padding::horizontal(1));
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
+
+    let [inner_area, _, footer_area] = inner_area.layout(&Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ]));
+    if focused {
+        frame.render_widget(
+            format_keybinding_hints(&[
+                ("↑↓", "Move"),
+                ("⏎", "Play"),
+                ("a", "Add to queue"),
+                ("←", "Albums"),
+            ]),
+            footer_area,
+        );
+    }
 
     let Some(open_album) = open_album else {
         return;

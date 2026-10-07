@@ -6,7 +6,7 @@ use crate::domain::login::LoginEvent;
 use crate::domain::player::{PlayerEvent, PlayingSongDetails};
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
-use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
+use crate::open_subsonic::OpenSubsonicOptions;
 use crate::screens::home::HomeScreen;
 use crate::screens::initial::InitScreen;
 use crate::screens::login::LoginScreen;
@@ -149,11 +149,12 @@ impl App {
             ClientConfigRepository::new(self.service_container.database.clone()).get()?;
         if let Some(client_config) = client_config {
             self.service_container
-                .set_client(OpenSubsonicClient::new(OpenSubsonicOptions::new(
+                .client
+                .set_options(OpenSubsonicOptions::new(
                     client_config.url,
                     client_config.username,
                     client_config.password,
-                )));
+                ));
             self.service_container.collection.load_from_db()?;
             self.service_container.queue.load_from_db()?;
             if let Some((_, details)) = self.service_container.queue.current() {
@@ -178,7 +179,9 @@ impl App {
             AppEvent::Login(event) => match event {
                 LoginEvent::LoginResult(result) => match result {
                     Ok(login_result) => {
-                        self.service_container.set_client(login_result.client);
+                        self.service_container
+                            .client
+                            .set_options(login_result.options);
                         self.overlay = None;
                         self.active_screen = Box::new(self.home_screen());
                         self.service_container.collection.sync(SyncKind::Full);

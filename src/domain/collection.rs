@@ -93,10 +93,6 @@ impl CollectionService {
         }
     }
 
-    pub(super) fn set_client(&mut self, client: OpenSubsonicClient) {
-        self.client = client;
-    }
-
     /// Borrows the state under a read lock instead of cloning it, so callers
     /// like per-frame rendering don't copy the whole collection. Keep `f`
     /// short — sync progress updates block while it runs.

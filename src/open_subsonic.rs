@@ -2,9 +2,9 @@ use crate::types::Seconds;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
+use reqwest::RequestBuilder;
 use reqwest::Result;
-use reqwest::{IntoUrl, RequestBuilder};
-use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 
 #[derive(Default, Clone)]
@@ -26,55 +26,47 @@ impl OpenSubsonicOptions {
     }
 }
 
+const CLIENT_NAME: &str = "Hipp Player";
+
 #[derive(Clone)]
 pub struct OpenSubsonicClient {
-    options: OpenSubsonicOptions,
+    options: Arc<RwLock<OpenSubsonicOptions>>,
     client: reqwest::Client,
 }
 
 impl OpenSubsonicClient {
     pub fn new(options: OpenSubsonicOptions) -> Self {
         Self {
-            options,
+            options: Arc::new(RwLock::new(options)),
             client: Default::default(),
         }
     }
 
-    pub fn options(&self) -> &OpenSubsonicOptions {
-        &self.options
+    pub fn options(&self) -> OpenSubsonicOptions {
+        self.options.read().unwrap().clone()
     }
 
-    fn build_url(&self, url: &str) -> String {
-        format!("{}/rest/{}", self.options.url, url)
+    pub fn set_options(&self, options: OpenSubsonicOptions) {
+        *self.options.write().unwrap() = options;
     }
 
-    // TODO: the result of this method will never change, no point in creating a new hash map for each request
-    fn base_query(&self) -> HashMap<&str, String> {
-        const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::rng();
-        let password_salt: String = (0..8)
-            .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
-            .collect();
-
-        let salted_password = [self.options.password.as_bytes(), password_salt.as_bytes()].concat();
-        let password_hash = format!("{:x}", md5::compute(salted_password));
-
-        HashMap::from([
-            ("u", self.options.username.clone()),
-            ("t", password_hash),
-            ("s", password_salt),
-            ("v", self.options.api_version.clone()),
-            ("c", "Hipp Player".to_string()),
-            ("f", "json".to_string()),
-        ])
-    }
-
-    fn get<U: IntoUrl>(&self, url: U) -> RequestBuilder {
-        self.client.get(url).query(&self.base_query())
+    fn get(&self, path: &str) -> RequestBuilder {
+        let options = self.options.read().unwrap();
+        let (salt, token) = auth_token(&options.password);
+        self.client
+            .get(format!("{}/rest/{}", options.url, path))
+            .query(&[
+                ("u", options.username.as_str()),
+                ("t", &token),
+                ("s", &salt),
+                ("v", &options.api_version),
+                ("c", CLIENT_NAME),
+                ("f", "json"),
+            ])
     }
 
     pub async fn ping(&self) -> Result<PingResponse> {
-        let request = self.get(self.build_url("ping")).build()?;
+        let request = self.get("ping").build()?;
 
         let result = self
             .client
@@ -87,7 +79,7 @@ impl OpenSubsonicClient {
     }
 
     pub async fn get_artists(&self) -> Result<Vec<Artist>> {
-        let request = self.get(self.build_url("getArtists")).build()?;
+        let request = self.get("getArtists").build()?;
 
         let result = self
             .client
@@ -107,10 +99,7 @@ impl OpenSubsonicClient {
     }
 
     pub async fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<Album>> {
-        let request = self
-            .get(self.build_url("getArtist"))
-            .query(&[("id", artist_id)])
-            .build()?;
+        let request = self.get("getArtist").query(&[("id", artist_id)]).build()?;
 
         let result = self
             .client
@@ -124,7 +113,7 @@ impl OpenSubsonicClient {
 
     pub async fn get_newest_albums(&self, size: u32, offset: u32) -> Result<Vec<Album>> {
         let request = self
-            .get(self.build_url("getAlbumList2"))
+            .get("getAlbumList2")
             .query(&[
                 ("type", "newest".to_string()),
                 ("size", size.to_string()),
@@ -143,10 +132,7 @@ impl OpenSubsonicClient {
     }
 
     pub async fn get_album(&self, album_id: &str) -> Result<AlbumWithSongs> {
-        let request = self
-            .get(self.build_url("getAlbum"))
-            .query(&[("id", album_id)])
-            .build()?;
+        let request = self.get("getAlbum").query(&[("id", album_id)]).build()?;
 
         let result = self
             .client
@@ -162,7 +148,7 @@ impl OpenSubsonicClient {
     /// `size` asks the server to scale it down, which not every server does.
     pub async fn get_cover_art(&self, cover_art_id: &str, size: u32) -> Result<Vec<u8>> {
         let request = self
-            .get(self.build_url("getCoverArt"))
+            .get("getCoverArt")
             .query(&[("id", cover_art_id.to_string()), ("size", size.to_string())])
             .build()?;
 
@@ -180,12 +166,26 @@ impl OpenSubsonicClient {
         song_id: &str,
     ) -> Result<impl Stream<Item = Result<Bytes>> + use<>> {
         let request = self
-            .get(self.build_url("stream"))
+            .get("stream")
             .query(&[("id", song_id.to_string())])
             .build()?;
 
         Ok(self.client.execute(request).await?.bytes_stream())
     }
+}
+
+/// Returns `(salt, token)`; the salt should be fresh for every request.
+fn auth_token(password: &str) -> (String, String) {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::rng();
+    let salt: String = (0..8)
+        .map(|_| CHARSET[rng.random_range(0..CHARSET.len())] as char)
+        .collect();
+
+    let salted_password = [password.as_bytes(), salt.as_bytes()].concat();
+    let token = format!("{:x}", md5::compute(salted_password));
+
+    (salt, token)
 }
 
 #[derive(serde::Deserialize)]

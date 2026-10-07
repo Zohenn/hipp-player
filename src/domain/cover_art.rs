@@ -66,10 +66,6 @@ impl CoverArtService {
         })
     }
 
-    pub(super) fn set_client(&mut self, client: OpenSubsonicClient) {
-        self.client = client;
-    }
-
     /// The cover always arrives as a `CoverArtEvent::Loaded`, even when it's
     /// already in memory, so callers have a single path to handle. Albums
     /// requesting a cover that's already loading wait on the pending load.

@@ -6,7 +6,6 @@ use crate::domain::album::Album;
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
 use crate::domain::song::Song;
 use crate::domain::source::SourceKind;
-use crate::open_subsonic::OpenSubsonicClient;
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use rodio::source::EmptyCallback;
@@ -99,11 +98,6 @@ impl PlayerService {
             current_song: None,
             volume: 20,
         }
-    }
-
-    pub fn set_client(&mut self, client: OpenSubsonicClient) {
-        // TODO: this is dumb
-        self.open_subsonic_streaming_service.set_client(client);
     }
 
     pub fn play(&mut self, details: PlayingSongDetails) -> Result<()> {

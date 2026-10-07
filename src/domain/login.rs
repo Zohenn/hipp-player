@@ -21,7 +21,7 @@ pub enum LoginEvent {
 
 pub struct LoginResult {
     pub response: PingResponse,
-    pub client: OpenSubsonicClient,
+    pub options: OpenSubsonicOptions,
 }
 
 pub struct LoginService {
@@ -45,16 +45,17 @@ impl LoginService {
         let db = self.database.clone();
 
         tokio::spawn(async move {
-            let client = OpenSubsonicClient::new(OpenSubsonicOptions::new(
+            let options = OpenSubsonicOptions::new(
                 login_params.url.clone(),
                 login_params.username.clone(),
                 login_params.password.clone(),
-            ));
+            );
 
-            let result = client
+            // Verify the credentials with a throwaway client before applying them.
+            let result = OpenSubsonicClient::new(options.clone())
                 .ping()
                 .await
-                .map(|response| LoginResult { response, client });
+                .map(|response| LoginResult { response, options });
 
             let to_send = match result {
                 Ok(result) => {

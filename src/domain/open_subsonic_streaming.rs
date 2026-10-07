@@ -19,10 +19,6 @@ impl OpenSubsonicStreamingService {
         Ok(Self { client, cache_dir })
     }
 
-    pub(super) fn set_client(&mut self, client: OpenSubsonicClient) {
-        self.client = client;
-    }
-
     pub async fn stream_song(&mut self, song_id: &str) -> Result<std::fs::File> {
         let cache_path = self.cache_dir.join(song_id);
         if let Ok(cache_file) = std::fs::File::open(&cache_path) {

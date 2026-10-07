@@ -55,11 +55,4 @@ impl ServiceContainer {
             queue: QueueService::new(database),
         })
     }
-
-    pub fn set_client(&mut self, client: OpenSubsonicClient) {
-        self.client = client.clone();
-        self.collection.set_client(client.clone());
-        self.cover_art.set_client(client.clone());
-        self.player.set_client(client);
-    }
 }

@@ -1,9 +1,12 @@
+use crate::data::log_error;
 use crate::types::Seconds;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
+use color_eyre::eyre::{self, eyre};
 use rand::RngExt;
-use reqwest::RequestBuilder;
 use reqwest::Result;
+use reqwest::{Request, RequestBuilder};
+use serde::de::DeserializeOwned;
 use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 
@@ -27,6 +30,7 @@ impl OpenSubsonicOptions {
 }
 
 const CLIENT_NAME: &str = "Hipp Player";
+const BODY_LOG_LIMIT: usize = 2000;
 
 #[derive(Clone)]
 pub struct OpenSubsonicClient {
@@ -65,31 +69,18 @@ impl OpenSubsonicClient {
             ])
     }
 
-    pub async fn ping(&self) -> Result<PingResponse> {
+    pub async fn ping(&self) -> eyre::Result<PingResponse> {
         let request = self.get("ping").build()?;
 
-        let result = self
-            .client
-            .execute(request)
-            .await?
-            .json::<OpenSubsonicResponse<PingResponse>>()
-            .await?;
-
-        Ok(result.subsonic_response)
+        self.execute_json(request).await
     }
 
-    pub async fn get_artists(&self) -> Result<Vec<Artist>> {
+    pub async fn get_artists(&self) -> eyre::Result<Vec<Artist>> {
         let request = self.get("getArtists").build()?;
 
-        let result = self
-            .client
-            .execute(request)
-            .await?
-            .json::<OpenSubsonicResponse<GetArtistsResponse>>()
-            .await?;
+        let result: GetArtistsResponse = self.execute_json(request).await?;
 
         Ok(result
-            .subsonic_response
             .artists
             .index
             .into_iter()
@@ -98,20 +89,15 @@ impl OpenSubsonicClient {
             .collect())
     }
 
-    pub async fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<Album>> {
+    pub async fn get_artist_albums(&self, artist_id: &str) -> eyre::Result<Vec<Album>> {
         let request = self.get("getArtist").query(&[("id", artist_id)]).build()?;
 
-        let result = self
-            .client
-            .execute(request)
-            .await?
-            .json::<OpenSubsonicResponse<GetArtistResponse>>()
-            .await?;
+        let result: GetArtistResponse = self.execute_json(request).await?;
 
-        Ok(result.subsonic_response.artist.album)
+        Ok(result.artist.album)
     }
 
-    pub async fn get_newest_albums(&self, size: u32, offset: u32) -> Result<Vec<Album>> {
+    pub async fn get_newest_albums(&self, size: u32, offset: u32) -> eyre::Result<Vec<Album>> {
         let request = self
             .get("getAlbumList2")
             .query(&[
@@ -121,27 +107,58 @@ impl OpenSubsonicClient {
             ])
             .build()?;
 
-        let result = self
-            .client
-            .execute(request)
-            .await?
-            .json::<OpenSubsonicResponse<GetAlbumList2Response>>()
-            .await?;
+        let result: GetAlbumList2Response = self.execute_json(request).await?;
 
-        Ok(result.subsonic_response.album_list2.album)
+        Ok(result.album_list2.album)
     }
 
-    pub async fn get_album(&self, album_id: &str) -> Result<AlbumWithSongs> {
+    pub async fn get_album(&self, album_id: &str) -> eyre::Result<AlbumWithSongs> {
         let request = self.get("getAlbum").query(&[("id", album_id)]).build()?;
 
-        let result = self
-            .client
-            .execute(request)
-            .await?
-            .json::<OpenSubsonicResponse<GetAlbumResponse>>()
-            .await?;
+        let result: GetAlbumResponse = self.execute_json(request).await?;
 
-        Ok(result.subsonic_response.album)
+        Ok(result.album)
+    }
+
+    /// Runs a request and parses its Subsonic JSON envelope. On failure the
+    /// short error is returned and the full response is written to error.log.
+    async fn execute_json<T: DeserializeOwned>(&self, request: Request) -> eyre::Result<T> {
+        let url = redacted_url(request.url());
+        let endpoint = request
+            .url()
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .unwrap_or_default()
+            .to_owned();
+        let response =
+            self.client.execute(request).await.map_err(|err| {
+                eyre!("{endpoint}: request to {url} failed: {}", err.without_url())
+            })?;
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let body = response
+            .text()
+            .await
+            .map_err(|err| eyre!("{endpoint}: reading response failed: {}", err.without_url()))?;
+
+        let error = match parse_response(&content_type, &body) {
+            Ok(result) => return Ok(result),
+            Err(ParseFailure::ServerError(message)) => return Err(eyre!("{endpoint}: {message}")),
+            Err(ParseFailure::Unexpected(message)) => format!("{endpoint}: {message}"),
+        };
+
+        log_error(format!(
+            "[{}] {error}\n  url: {url}\n  status: {status}\n  content-type: {content_type}\n  body (first {BODY_LOG_LIMIT} bytes):\n{}\n",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            truncate(&body, BODY_LOG_LIMIT),
+        ));
+
+        Err(eyre!("{error} (details in error.log)"))
     }
 
     /// Returns the raw image bytes, in whatever format the server stores.
@@ -186,6 +203,87 @@ fn auth_token(password: &str) -> (String, String) {
     let token = format!("{:x}", md5::compute(salted_password));
 
     (salt, token)
+}
+
+/// The URL without the auth params, safe to write to a log.
+fn redacted_url(url: &reqwest::Url) -> String {
+    let mut url = url.clone();
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !matches!(key.as_ref(), "u" | "t" | "s"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.query_pairs_mut().clear().extend_pairs(pairs);
+    url.to_string()
+}
+
+enum ParseFailure {
+    /// The server answered properly, with a Subsonic error.
+    ServerError(String),
+    /// The response isn't something we understand.
+    Unexpected(String),
+}
+
+fn parse_response<T: DeserializeOwned>(
+    content_type: &str,
+    body: &str,
+) -> std::result::Result<T, ParseFailure> {
+    let envelope = match serde_json::from_str::<OpenSubsonicResponse<StatusEnvelope>>(body) {
+        Ok(envelope) => envelope.subsonic_response,
+        Err(err) => {
+            return Err(ParseFailure::Unexpected(
+                match non_json_kind(content_type, body) {
+                    Some(kind) => format!("server returned {kind} instead of JSON"),
+                    None => format!("unexpected response: {err}"),
+                },
+            ));
+        }
+    };
+
+    if envelope.status == "failed" {
+        return Err(ParseFailure::ServerError(match envelope.error {
+            Some(error) => format!("server error {}: {}", error.code, error.message),
+            None => "server reported failure without details".to_owned(),
+        }));
+    }
+
+    serde_json::from_str::<OpenSubsonicResponse<T>>(body)
+        .map(|response| response.subsonic_response)
+        .map_err(|err| ParseFailure::Unexpected(format!("unexpected response: {err}")))
+}
+
+fn non_json_kind(content_type: &str, body: &str) -> Option<&'static str> {
+    let body = body.trim_start();
+    if content_type.contains("html") || body.starts_with("<!") || body.starts_with("<html") {
+        Some("HTML")
+    } else if content_type.contains("xml") || body.starts_with('<') {
+        Some("XML")
+    } else if body.is_empty() {
+        Some("an empty body")
+    } else {
+        None
+    }
+}
+
+fn truncate(text: &str, max_bytes: usize) -> &str {
+    let mut end = text.len().min(max_bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+#[derive(serde::Deserialize)]
+struct StatusEnvelope {
+    status: String,
+    error: Option<SubsonicError>,
+}
+
+#[derive(serde::Deserialize)]
+struct SubsonicError {
+    code: i64,
+    #[serde(default)]
+    message: String,
 }
 
 #[derive(serde::Deserialize)]

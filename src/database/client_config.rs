@@ -1,12 +1,11 @@
 use crate::database::core::database::Database;
 use crate::domain::client_config::ClientConfig;
-use aes_gcm::aead::consts::U12;
 use aes_gcm::aead::rand_core::Rng;
 use aes_gcm::aead::{Aead, Generate};
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
 use chrono::{DateTime, Utc};
 use color_eyre::Result;
-use color_eyre::eyre::{ContextCompat, WrapErr};
+use color_eyre::eyre::WrapErr;
 use keyring::Entry;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -104,11 +103,8 @@ fn convert_stored_client_config(stored: StoredClientConfig) -> Result<ClientConf
         cipher.decrypt(&Nonce::from(stored.nonce), stored.password.as_slice())?;
 
     Ok(ClientConfig {
-        id: stored.id,
         url: stored.url,
         username: stored.username,
         password: String::from_utf8(decrypted_password)?,
-        nonce: stored.nonce,
-        created_at: stored.created_at,
     })
 }

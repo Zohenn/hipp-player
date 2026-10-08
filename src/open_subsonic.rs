@@ -294,6 +294,7 @@ struct OpenSubsonicResponse<T> {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct PingResponse {
     version: String,
     r#type: String,

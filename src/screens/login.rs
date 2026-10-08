@@ -84,7 +84,7 @@ impl Screen for LoginScreen {
         None
     }
 
-    fn handle_async_event(&mut self, event: &AppEvent) {}
+    fn handle_async_event(&mut self, _event: &AppEvent) {}
 
     fn render(
         &mut self,

@@ -289,7 +289,7 @@ impl App {
         match &self.overlay {
             Some(overlay) => {
                 if matches!(overlay, AppOverlay::Error(_)) {
-                    if let Some(key) = event.as_key_press_event() {
+                    if event.as_key_press_event().is_some() {
                         self.overlay = None;
                     }
                 }

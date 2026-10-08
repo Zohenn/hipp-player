@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::{Color, Modifier};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Padding, Paragraph, Widget};
 
 pub enum AppOverlay {
     Loading(OverlayOptions),
@@ -11,6 +11,7 @@ pub enum AppOverlay {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct OverlayOptions {
     text: Option<String>,
     style: Option<Style>,

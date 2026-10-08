@@ -1,4 +1,4 @@
-use crate::data::app_data_dir;
+use crate::data::{app_data_dir, log_error};
 use crate::open_subsonic::OpenSubsonicClient;
 use color_eyre::eyre::{Context, Result};
 use std::path::PathBuf;
@@ -63,7 +63,7 @@ impl OpenSubsonicStreamingService {
             .await;
 
             if let Err(e) = result {
-                // todo: handle this?
+                log_error(format!("{e:?}"));
                 let _ = tokio::fs::remove_file(&part_path).await;
             }
         });

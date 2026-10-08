@@ -1,6 +1,7 @@
 use crate::database::core::database::Database;
 use crate::database::core::migrations::get_available_migrations;
 use color_eyre::Result;
+use color_eyre::eyre::WrapErr;
 
 pub struct DatabaseMigration {
     name: String,
@@ -18,7 +19,8 @@ pub fn migrate(database: &Database) -> Result<()> {
     let available_migrations = get_available_migrations();
 
     while let Some(migration) = find_next_migration(database, &available_migrations)? {
-        (migration.up)(database)?;
+        (migration.up)(database)
+            .wrap_err_with(|| format!("migration {} failed", migration.name))?;
         database.set_schema_version(migration.version)?;
     }
 

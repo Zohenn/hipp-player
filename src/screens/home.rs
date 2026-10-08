@@ -11,14 +11,14 @@ use chrono::Local;
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Margin, Rect};
-use ratatui::prelude::{HorizontalAlignment, Layout};
+use ratatui::prelude::Layout;
 use ratatui::style::{Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListState, Padding, Paragraph, Row, Table, TableState};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{FontSize, Resize, StatefulImage};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 pub struct HomeScreen {
     collection: CollectionService,

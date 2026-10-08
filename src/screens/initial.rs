@@ -1,29 +1,24 @@
 use crate::domain::AppEvent;
 use crate::domain::player::PlayingSongDetails;
-use crate::screens::login::LoginScreen;
 use crate::screens::screen::{Action, Screen};
 use ratatui::Frame;
 use ratatui::crossterm::event::Event;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::widgets::Paragraph;
+use ratatui::layout::Rect;
 
 pub struct InitScreen {}
 
 impl Screen for InitScreen {
-    fn handle_input_event(&mut self, event: Event) -> Option<Action> {
+    fn handle_input_event(&mut self, _event: Event) -> Option<Action> {
         None
     }
 
-    fn handle_async_event(&mut self, event: &AppEvent) {}
+    fn handle_async_event(&mut self, _event: &AppEvent) {}
 
-    fn render(&mut self, frame: &mut Frame, rect: Rect, _now_playing: Option<&PlayingSongDetails>) {
-        // let layout = Layout::vertical([
-        //     Constraint::Fill(1),
-        //     Constraint::Length(1),
-        //     Constraint::Fill(1),
-        // ]);
-        // let [_, message_area, _] = frame.area().layout(&layout);
-        //
-        // frame.render_widget(Paragraph::new("Initializing app").centered(), message_area);
+    fn render(
+        &mut self,
+        _frame: &mut Frame,
+        _rect: Rect,
+        _now_playing: Option<&PlayingSongDetails>,
+    ) {
     }
 }

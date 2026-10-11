@@ -116,6 +116,17 @@ impl CoverArtService {
         });
     }
 
+    /// The album's cover file, if it has one and it's already cached.
+    pub fn cached_path(&self, album_id: i64) -> Option<PathBuf> {
+        let connection = self.database.connection().ok()?;
+        let cover = CoverArtRepository::new()
+            .find_by_album(&connection, album_id)
+            .ok()??;
+        let path = self.cache_path(&cover);
+
+        path.exists().then_some(path)
+    }
+
     fn send_loaded(&self, album_id: i64, result: Result<Option<Arc<DynamicImage>>, String>) {
         let _ = self
             .event_tx

@@ -2,6 +2,7 @@ use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::backup::DatabaseBackup;
 use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
+use crate::domain::cover_art::CoverArtEvent;
 use crate::domain::login::LoginEvent;
 use crate::domain::player::{PlayerEvent, PlayingSongDetails};
 use crate::domain::sync_run::SyncKind;
@@ -94,6 +95,9 @@ impl App {
         while !self.should_quit {
             tokio::select! {
                 _ = interval.tick() => {
+                    self.service_container
+                        .playback
+                        .sync(&self.service_container.player, &self.service_container.queue);
                     terminal.draw(|frame| {
                         frame.render_widget(Block::default().style(Style::default().bg(theme.bg_darker)), frame.area());
                         if self.set_up {
@@ -190,7 +194,11 @@ impl App {
                     Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
                 },
             },
-            AppEvent::CoverArt(_) => {}
+            AppEvent::CoverArt(CoverArtEvent::Loaded { album_id, .. }) => {
+                self.service_container
+                    .playback
+                    .on_cover_loaded(album_id, &self.service_container.player);
+            }
             AppEvent::Player(event) => {
                 if let PlayerEvent::Error(err) | PlayerEvent::StreamFailed { error: err, .. } =
                     &event
@@ -207,6 +215,16 @@ impl App {
                     self.play(next);
                 }
                 if let Err(err) = self.service_container.player.handle_event(event) {
+                    self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
+                }
+            }
+            AppEvent::Playback(event) => {
+                let services = &mut self.service_container;
+                if let Err(err) =
+                    services
+                        .playback
+                        .handle_event(event, &mut services.player, &mut services.queue)
+                {
                     self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
                 }
             }

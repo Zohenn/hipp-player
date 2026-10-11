@@ -3,6 +3,7 @@ use crate::domain::collection::CollectionService;
 use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
 use crate::domain::login::{LoginEvent, LoginService};
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
+use crate::domain::playback::{PlaybackEvent, PlaybackService};
 use crate::domain::player::{PlayerEvent, PlayerService};
 use crate::domain::queue::QueueService;
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -15,7 +16,9 @@ pub mod client_config;
 pub mod collection;
 pub mod cover_art;
 pub mod login;
+pub mod notification;
 pub mod open_subsonic_streaming;
+pub mod playback;
 pub mod player;
 pub mod queue;
 pub mod song;
@@ -26,6 +29,7 @@ pub enum AppEvent {
     Login(LoginEvent),
     CoverArt(CoverArtEvent),
     Player(PlayerEvent),
+    Playback(PlaybackEvent),
 }
 
 pub struct ServiceContainer {
@@ -36,23 +40,26 @@ pub struct ServiceContainer {
     pub cover_art: CoverArtService,
     pub player: PlayerService,
     pub queue: QueueService,
+    pub playback: PlaybackService,
 }
 
 impl ServiceContainer {
     pub fn new(database: Database, event_tx: UnboundedSender<AppEvent>) -> Result<Self> {
         let client = OpenSubsonicClient::new(OpenSubsonicOptions::default());
+        let cover_art = CoverArtService::new(database.clone(), client.clone(), event_tx.clone())?;
         Ok(Self {
             database: database.clone(),
             client: client.clone(),
             login: LoginService::new(database.clone(), event_tx.clone()),
             collection: CollectionService::new(database.clone(), client.clone()),
-            cover_art: CoverArtService::new(database.clone(), client.clone(), event_tx.clone())?,
+            cover_art: cover_art.clone(),
             player: PlayerService::new(
                 database.clone(),
                 OpenSubsonicStreamingService::new(client)?,
-                event_tx,
+                event_tx.clone(),
             ),
             queue: QueueService::new(database),
+            playback: PlaybackService::new(event_tx, cover_art),
         })
     }
 }

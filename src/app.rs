@@ -4,7 +4,8 @@ use crate::database::core::database::Database;
 use crate::database::core::migration::{has_pending_migrations, migrate};
 use crate::domain::cover_art::CoverArtEvent;
 use crate::domain::login::LoginEvent;
-use crate::domain::player::{PlayerEvent, PlayingSongDetails};
+use crate::domain::playback::PlaybackCommand;
+use crate::domain::player::PlayerEvent;
 use crate::domain::sync_run::SyncKind;
 use crate::domain::{AppEvent, ServiceContainer};
 use crate::open_subsonic::OpenSubsonicOptions;
@@ -95,9 +96,6 @@ impl App {
         while !self.should_quit {
             tokio::select! {
                 _ = interval.tick() => {
-                    self.service_container
-                        .playback
-                        .sync(&self.service_container.player, &self.service_container.queue);
                     terminal.draw(|frame| {
                         frame.render_widget(Block::default().style(Style::default().bg(theme.bg_darker)), frame.area());
                         if self.set_up {
@@ -105,13 +103,13 @@ impl App {
                                 Constraint::Fill(1),
                                 Constraint::Length(3),
                             ]));
-                            let player_state = self.service_container.player.snapshot();
+                            let player_state = self.service_container.playback.player().snapshot();
                             self.active_screen.render(
                                 frame,
                                 screen_area.inner(Margin::new(1, 1)),
                                 player_state.as_ref().map(|state| state.details),
                             );
-                            let queue = &self.service_container.queue;
+                            let queue = self.service_container.playback.queue();
                             let queue_position = queue
                                 .current()
                                 .map(|(index, _)| (index + 1, queue.entries().len()));
@@ -160,10 +158,7 @@ impl App {
                     client_config.password,
                 ));
             self.service_container.collection.load_from_db()?;
-            self.service_container.queue.load_from_db()?;
-            if let Some((_, details)) = self.service_container.queue.current() {
-                self.service_container.player.restore(details.clone());
-            }
+            self.service_container.playback.load_queue()?;
             if let Some(kind) = self.service_container.collection.due_sync()? {
                 self.service_container.collection.sync(kind);
             }
@@ -195,9 +190,7 @@ impl App {
                 },
             },
             AppEvent::CoverArt(CoverArtEvent::Loaded { album_id, .. }) => {
-                self.service_container
-                    .playback
-                    .on_cover_loaded(album_id, &self.service_container.player);
+                self.service_container.playback.on_cover_loaded(album_id);
             }
             AppEvent::Player(event) => {
                 if let PlayerEvent::Error(err) | PlayerEvent::StreamFailed { error: err, .. } =
@@ -205,41 +198,16 @@ impl App {
                 {
                     self.overlay = Some(AppOverlay::error(Some(err.clone())));
                 }
-                if let PlayerEvent::Finished { request_id } = &event
-                    && self
-                        .service_container
-                        .player
-                        .is_current_request(*request_id)
-                {
-                    let next = self.service_container.queue.next();
-                    self.play(next);
-                }
-                if let Err(err) = self.service_container.player.handle_event(event) {
+                if let Err(err) = self.service_container.playback.handle_player_event(event) {
                     self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
                 }
             }
-            AppEvent::Playback(event) => {
-                let services = &mut self.service_container;
-                if let Err(err) =
-                    services
-                        .playback
-                        .handle_event(event, &mut services.player, &mut services.queue)
-                {
-                    self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                }
-            }
+            AppEvent::PlaybackCommand(event) => self.dispatch_playback_command(event),
         }
     }
 
-    /// Takes the result of a queue operation; `None` means there was nothing
-    /// to move to, so the current song is left alone.
-    fn play(&mut self, details: Result<Option<PlayingSongDetails>>) {
-        let result = match details {
-            Ok(Some(details)) => self.service_container.player.play(details),
-            Ok(None) => Ok(()),
-            Err(err) => Err(err),
-        };
-        if let Err(err) = result {
+    fn dispatch_playback_command(&mut self, event: PlaybackCommand) {
+        if let Err(err) = self.service_container.playback.handle_event(event) {
             self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
         }
     }
@@ -259,9 +227,7 @@ impl App {
                     self.should_quit = true;
                 }
                 KeyCode::Char(' ') if self.set_up => {
-                    if let Err(err) = self.service_container.player.toggle_playback() {
-                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                    }
+                    self.dispatch_playback_command(PlaybackCommand::PlayPause);
 
                     return;
                 }
@@ -270,7 +236,8 @@ impl App {
                         Some(_) => None,
                         None => Some(QueueView::new(
                             self.service_container
-                                .queue
+                                .playback
+                                .queue()
                                 .current()
                                 .map(|(index, _)| index),
                         )),
@@ -279,24 +246,22 @@ impl App {
                     return;
                 }
                 KeyCode::Char('<') | KeyCode::Char(',') if self.set_up => {
-                    let previous = self.service_container.queue.previous();
-                    self.play(previous);
+                    self.dispatch_playback_command(PlaybackCommand::Previous);
 
                     return;
                 }
                 KeyCode::Char('>') | KeyCode::Char('.') if self.set_up => {
-                    let next = self.service_container.queue.next();
-                    self.play(next);
+                    self.dispatch_playback_command(PlaybackCommand::Next);
 
                     return;
                 }
                 KeyCode::Char('-') | KeyCode::Char('_') if self.set_up => {
-                    self.service_container.player.decrease_volume();
+                    self.dispatch_playback_command(PlaybackCommand::VolumeDown);
 
                     return;
                 }
                 KeyCode::Char('=') | KeyCode::Char('+') if self.set_up => {
-                    self.service_container.player.increase_volume();
+                    self.dispatch_playback_command(PlaybackCommand::VolumeUp);
 
                     return;
                 }
@@ -319,17 +284,14 @@ impl App {
 
         if let Some(queue_view) = &mut self.queue_view {
             if let Some(key) = event.as_key_press_event() {
-                let len = self.service_container.queue.entries().len();
+                let len = self.service_container.playback.queue().entries().len();
                 match queue_view.handle_key(key.code, len) {
                     Some(QueueViewAction::Close) => self.queue_view = None,
                     Some(QueueViewAction::Clear) => {
-                        if let Err(err) = self.service_container.queue.clear() {
-                            self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                        }
+                        self.dispatch_playback_command(PlaybackCommand::Clear)
                     }
                     Some(QueueViewAction::Play(index)) => {
-                        let selected = self.service_container.queue.select(index);
-                        self.play(selected);
+                        self.dispatch_playback_command(PlaybackCommand::Select(index))
                     }
                     None => {}
                 }
@@ -346,13 +308,10 @@ impl App {
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
                 Action::PlayQueue { entries, start } => {
-                    let current = self.service_container.queue.replace(entries, start);
-                    self.play(current);
+                    self.dispatch_playback_command(PlaybackCommand::Replace { entries, start })
                 }
                 Action::Enqueue(details) => {
-                    if let Err(err) = self.service_container.queue.append(details) {
-                        self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                    }
+                    self.dispatch_playback_command(PlaybackCommand::Enqueue(details))
                 }
                 Action::Quit => todo!(),
             }

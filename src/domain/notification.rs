@@ -1,6 +1,6 @@
 use crate::data::log_error;
 use crate::domain::AppEvent;
-use crate::domain::playback::PlaybackEvent;
+use crate::domain::playback::PlaybackCommand;
 use mpris_server::{Metadata, PlaybackStatus, Player, Time, zbus};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::LocalSet;
@@ -77,21 +77,21 @@ async fn run_server(
         .build()
         .await?;
 
-    let forward = |event: fn() -> PlaybackEvent| {
+    let forward = |event: fn() -> PlaybackCommand| {
         let event_tx = event_tx.clone();
         move |_: &Player| {
-            if let Err(err) = event_tx.send(AppEvent::Playback(event())) {
+            if let Err(err) = event_tx.send(AppEvent::PlaybackCommand(event())) {
                 log_error(err);
             }
         }
     };
-    player.connect_play(forward(|| PlaybackEvent::Play));
-    player.connect_pause(forward(|| PlaybackEvent::Pause));
+    player.connect_play(forward(|| PlaybackCommand::Play));
+    player.connect_pause(forward(|| PlaybackCommand::Pause));
     // There's no stopped state to go to, so stopping pauses.
-    player.connect_stop(forward(|| PlaybackEvent::Pause));
-    player.connect_play_pause(forward(|| PlaybackEvent::PlayPause));
-    player.connect_next(forward(|| PlaybackEvent::Next));
-    player.connect_previous(forward(|| PlaybackEvent::Previous));
+    player.connect_stop(forward(|| PlaybackCommand::Pause));
+    player.connect_play_pause(forward(|| PlaybackCommand::PlayPause));
+    player.connect_next(forward(|| PlaybackCommand::Next));
+    player.connect_previous(forward(|| PlaybackCommand::Previous));
 
     tokio::task::spawn_local(player.run());
 

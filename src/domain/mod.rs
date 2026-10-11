@@ -3,7 +3,7 @@ use crate::domain::collection::CollectionService;
 use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
 use crate::domain::login::{LoginEvent, LoginService};
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
-use crate::domain::playback::{PlaybackEvent, PlaybackService};
+use crate::domain::playback::{PlaybackCommand, PlaybackService};
 use crate::domain::player::{PlayerEvent, PlayerService};
 use crate::domain::queue::QueueService;
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions};
@@ -29,7 +29,7 @@ pub enum AppEvent {
     Login(LoginEvent),
     CoverArt(CoverArtEvent),
     Player(PlayerEvent),
-    Playback(PlaybackEvent),
+    PlaybackCommand(PlaybackCommand),
 }
 
 pub struct ServiceContainer {
@@ -38,8 +38,6 @@ pub struct ServiceContainer {
     pub login: LoginService,
     pub collection: CollectionService,
     pub cover_art: CoverArtService,
-    pub player: PlayerService,
-    pub queue: QueueService,
     pub playback: PlaybackService,
 }
 
@@ -53,13 +51,16 @@ impl ServiceContainer {
             login: LoginService::new(database.clone(), event_tx.clone()),
             collection: CollectionService::new(database.clone(), client.clone()),
             cover_art: cover_art.clone(),
-            player: PlayerService::new(
-                database.clone(),
-                OpenSubsonicStreamingService::new(client)?,
-                event_tx.clone(),
+            playback: PlaybackService::new(
+                PlayerService::new(
+                    database.clone(),
+                    OpenSubsonicStreamingService::new(client)?,
+                    event_tx.clone(),
+                ),
+                QueueService::new(database),
+                event_tx,
+                cover_art,
             ),
-            queue: QueueService::new(database),
-            playback: PlaybackService::new(event_tx, cover_art),
         })
     }
 }

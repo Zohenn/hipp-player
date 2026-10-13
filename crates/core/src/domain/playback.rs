@@ -1,18 +1,17 @@
-use crate::domain::AppEvent;
+use crate::domain::CoreEvent;
 use crate::domain::cover_art::CoverArtService;
-use crate::domain::notification::NotificationService;
+use crate::domain::media_controls::{MediaControlsService, MediaStatus, TrackMetadata};
 use crate::domain::player::{PlaybackState, PlayerEvent, PlayerService, PlayingSongDetails};
 use crate::domain::queue::QueueService;
 use color_eyre::Result;
-use mpris_server::{Metadata, PlaybackStatus, Time, TrackId};
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub struct PlaybackService {
     player: PlayerService,
     queue: QueueService,
-    notification: NotificationService,
+    media_controls: MediaControlsService,
     cover_art: CoverArtService,
     published: Published,
     pending_art_album: Option<i64>,
@@ -35,12 +34,12 @@ pub enum PlaybackCommand {
     },
 }
 
-/// What the notification service was last told, so it's only updated on
+/// What the media controls were last told, so it's only updated on
 /// change.
 #[derive(Default, PartialEq)]
 struct Published {
     song_id: Option<i64>,
-    status: Option<PlaybackStatus>,
+    status: Option<MediaStatus>,
     can_go_next: bool,
     can_go_previous: bool,
 }
@@ -49,13 +48,13 @@ impl PlaybackService {
     pub fn new(
         player: PlayerService,
         queue: QueueService,
-        event_tx: UnboundedSender<AppEvent>,
+        event_tx: UnboundedSender<CoreEvent>,
         cover_art: CoverArtService,
     ) -> Self {
         Self {
             player,
             queue,
-            notification: NotificationService::new(event_tx),
+            media_controls: MediaControlsService::new(event_tx),
             cover_art,
             published: Published::default(),
             pending_art_album: None,
@@ -166,7 +165,7 @@ impl PlaybackService {
         }
     }
 
-    /// Pushes any change in playback state to the notification service.
+    /// Pushes any change in playback state to the media controls.
     /// Playback state only changes through this service, so it's called after
     /// each of the entry points above.
     fn sync(&mut self) {
@@ -175,11 +174,11 @@ impl PlaybackService {
         let (status, position) = match state.as_ref().map(|state| &state.playback_state) {
             Some(PlaybackState::Loading) => {
                 // The user asked for playback, it just hasn't started yet.
-                (Some(PlaybackStatus::Playing), Duration::ZERO)
+                (Some(MediaStatus::Playing), Duration::ZERO)
             }
-            Some(PlaybackState::Playing(position)) => (Some(PlaybackStatus::Playing), *position),
-            Some(PlaybackState::Paused(position)) => (Some(PlaybackStatus::Paused), *position),
-            Some(PlaybackState::Stopped) => (Some(PlaybackStatus::Stopped), Duration::ZERO),
+            Some(PlaybackState::Playing(position)) => (Some(MediaStatus::Playing), *position),
+            Some(PlaybackState::Paused(position)) => (Some(MediaStatus::Paused), *position),
+            Some(PlaybackState::Stopped) => (Some(MediaStatus::Stopped), Duration::ZERO),
             None => (None, Duration::ZERO),
         };
 
@@ -202,23 +201,22 @@ impl PlaybackService {
                 Some(details) => self.publish_song(details),
                 None => {
                     self.pending_art_album = None;
-                    self.notification.set_metadata(Metadata::new());
+                    self.media_controls.set_metadata(None);
                 }
             }
         }
         if details.is_some() {
-            self.notification
-                .set_position(Time::from_micros(position.as_micros() as i64));
+            self.media_controls.set_position(position);
         }
         if published.status != self.published.status {
-            self.notification
-                .set_playback_status(published.status.unwrap_or(PlaybackStatus::Stopped));
+            self.media_controls
+                .set_playback_status(published.status.unwrap_or(MediaStatus::Stopped));
         }
         if published.can_go_next != self.published.can_go_next {
-            self.notification.set_can_go_next(published.can_go_next);
+            self.media_controls.set_can_go_next(published.can_go_next);
         }
         if published.can_go_previous != self.published.can_go_previous {
-            self.notification
+            self.media_controls
                 .set_can_go_previous(published.can_go_previous);
         }
 
@@ -236,8 +234,8 @@ impl PlaybackService {
             && state.details.album_id == album_id
             && let Some(path) = self.cover_art.cached_path(album_id)
         {
-            self.notification
-                .set_metadata(metadata(state.details, Some(&path)));
+            self.media_controls
+                .set_metadata(Some(track_metadata(state.details, Some(path))));
         }
     }
 
@@ -250,8 +248,8 @@ impl PlaybackService {
         } else {
             None
         };
-        self.notification
-            .set_metadata(metadata(details, art.as_deref()));
+        self.media_controls
+            .set_metadata(Some(track_metadata(details, art)));
     }
 }
 
@@ -262,32 +260,13 @@ fn is_playing(player: &PlayerService) -> bool {
     )
 }
 
-fn metadata(details: &PlayingSongDetails, art: Option<&Path>) -> Metadata {
-    let mut metadata = Metadata::builder()
-        .title(details.song_title.clone())
-        .artist([details.artist_name.clone()])
-        .album(details.album_name.clone())
-        .length(Time::from_secs(details.song_duration))
-        .build();
-    if let Ok(track_id) = TrackId::try_from(format!("/org/hipp/track/{}", details.song_id).as_str())
-    {
-        metadata.set_trackid(Some(track_id));
+fn track_metadata(details: &PlayingSongDetails, art: Option<PathBuf>) -> TrackMetadata {
+    TrackMetadata {
+        song_id: details.song_id,
+        title: details.song_title.clone(),
+        artist: details.artist_name.clone(),
+        album: details.album_name.clone(),
+        length: Duration::from_secs(details.song_duration.max(0) as u64),
+        art,
     }
-    metadata.set_art_url(art.map(file_uri));
-
-    metadata
-}
-
-fn file_uri(path: &Path) -> String {
-    let mut uri = String::from("file://");
-    for byte in path.to_string_lossy().bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                uri.push(byte as char)
-            }
-            _ => uri.push_str(&format!("%{byte:02X}")),
-        }
-    }
-
-    uri
 }

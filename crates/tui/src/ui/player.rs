@@ -1,6 +1,6 @@
-use crate::domain::player::{PlaybackState, PlayerState};
 use crate::theme::get_app_theme;
 use crate::ui::keybinding::format_keybinding;
+use hipp_core::domain::player::{PlaybackState, PlayerState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, HorizontalAlignment, Layout, Margin, Rect};
 use ratatui::prelude::{Line, Span};

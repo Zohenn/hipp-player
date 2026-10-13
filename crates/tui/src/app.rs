@@ -1,14 +1,3 @@
-use crate::database::client_config::ClientConfigRepository;
-use crate::database::core::backup::DatabaseBackup;
-use crate::database::core::database::Database;
-use crate::database::core::migration::{has_pending_migrations, migrate};
-use crate::domain::cover_art::CoverArtEvent;
-use crate::domain::login::LoginEvent;
-use crate::domain::playback::PlaybackCommand;
-use crate::domain::player::PlayerEvent;
-use crate::domain::sync_run::SyncKind;
-use crate::domain::{AppEvent, ServiceContainer};
-use crate::open_subsonic::OpenSubsonicOptions;
 use crate::screens::home::HomeScreen;
 use crate::screens::initial::InitScreen;
 use crate::screens::login::LoginScreen;
@@ -20,6 +9,8 @@ use crate::ui::player::render_player;
 use crate::ui::queue::{QueueView, QueueViewAction, render_queue};
 use color_eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use hipp_core::domain::playback::PlaybackCommand;
+use hipp_core::domain::{Core, CoreEvent, CoreNotice, StartOutcome};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::EventStream;
 use ratatui::layout::{Constraint, Layout, Margin};
@@ -32,8 +23,8 @@ use tokio_stream::StreamExt;
 
 pub struct App {
     should_quit: bool,
-    event_rx: UnboundedReceiver<AppEvent>,
-    service_container: ServiceContainer,
+    event_rx: UnboundedReceiver<CoreEvent>,
+    core: Core,
     active_screen: Box<dyn Screen>,
     overlay: Option<AppOverlay>,
     queue_view: Option<QueueView>,
@@ -43,18 +34,8 @@ pub struct App {
 
 impl App {
     pub fn new() -> Result<Self> {
-        let database = Database::new()?;
-        let backup = DatabaseBackup::new(database.clone())?;
-        // A backup from earlier today may predate data written since, so a
-        // migration always gets a fresh one.
-        if has_pending_migrations(&database)? {
-            backup.create()?;
-        } else {
-            backup.create_if_due()?;
-        }
-        migrate(&database)?;
-        backup.spawn_periodic();
-        let (event_tx, event_rx) = unbounded_channel::<AppEvent>();
+        let (event_tx, event_rx) = unbounded_channel::<CoreEvent>();
+        let core = Core::new(event_tx)?;
         // Queries the terminal over stdin, so it has to happen before the
         // input EventStream starts reading from it.
         let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -62,7 +43,7 @@ impl App {
         Ok(Self {
             should_quit: false,
             event_rx,
-            service_container: ServiceContainer::new(database, event_tx)?,
+            core,
             active_screen: Box::new(InitScreen {}),
             overlay: None,
             queue_view: None,
@@ -103,13 +84,13 @@ impl App {
                                 Constraint::Fill(1),
                                 Constraint::Length(3),
                             ]));
-                            let player_state = self.service_container.playback.player().snapshot();
+                            let player_state = self.core.playback().player().snapshot();
                             self.active_screen.render(
                                 frame,
                                 screen_area.inner(Margin::new(1, 1)),
                                 player_state.as_ref().map(|state| state.details),
                             );
-                            let queue = self.service_container.playback.queue();
+                            let queue = self.core.playback().queue();
                             let queue_position = queue
                                 .current()
                                 .map(|(index, _)| (index + 1, queue.entries().len()));
@@ -147,75 +128,43 @@ impl App {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        let client_config =
-            ClientConfigRepository::new(self.service_container.database.clone()).get()?;
-        if let Some(client_config) = client_config {
-            self.service_container
-                .client
-                .set_options(OpenSubsonicOptions::new(
-                    client_config.url,
-                    client_config.username,
-                    client_config.password,
-                ));
-            self.service_container.collection.load_from_db()?;
-            self.service_container.playback.load_queue()?;
-            if let Some(kind) = self.service_container.collection.due_sync()? {
-                self.service_container.collection.sync(kind);
+        match self.core.start()? {
+            StartOutcome::Ready => self.active_screen = Box::new(self.home_screen()),
+            StartOutcome::LoginRequired => {
+                self.active_screen = Box::new(LoginScreen::new());
+                self.set_up = false;
             }
-            self.active_screen = Box::new(self.home_screen());
-        } else {
-            self.active_screen = Box::new(LoginScreen::new());
-            self.set_up = false;
         }
 
         Ok(())
     }
 
-    fn handle_async_event(&mut self, event: AppEvent) {
+    fn handle_async_event(&mut self, event: CoreEvent) {
         self.active_screen.handle_async_event(&event);
 
-        match event {
-            AppEvent::Login(event) => match event {
-                LoginEvent::LoginResult(result) => match result {
-                    Ok(login_result) => {
-                        self.service_container
-                            .client
-                            .set_options(login_result.options);
-                        self.overlay = None;
-                        self.active_screen = Box::new(self.home_screen());
-                        self.service_container.collection.sync(SyncKind::Full);
-                        self.set_up = true;
-                    }
-                    Err(err) => self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err)))),
-                },
-            },
-            AppEvent::CoverArt(CoverArtEvent::Loaded { album_id, .. }) => {
-                self.service_container.playback.on_cover_loaded(album_id);
+        match self.core.handle_event(event) {
+            Some(CoreNotice::LoggedIn) => {
+                self.overlay = None;
+                self.active_screen = Box::new(self.home_screen());
+                self.set_up = true;
             }
-            AppEvent::Player(event) => {
-                if let PlayerEvent::Error(err) | PlayerEvent::StreamFailed { error: err, .. } =
-                    &event
-                {
-                    self.overlay = Some(AppOverlay::error(Some(err.clone())));
-                }
-                if let Err(err) = self.service_container.playback.handle_player_event(event) {
-                    self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
-                }
+            Some(CoreNotice::Error(message)) => {
+                self.overlay = Some(AppOverlay::error(Some(message)))
             }
-            AppEvent::PlaybackCommand(event) => self.dispatch_playback_command(event),
+            None => {}
         }
     }
 
     fn dispatch_playback_command(&mut self, event: PlaybackCommand) {
-        if let Err(err) = self.service_container.playback.handle_event(event) {
+        if let Err(err) = self.core.dispatch(event) {
             self.overlay = Some(AppOverlay::error(Some(format!("{:#}", err))));
         }
     }
 
     fn home_screen(&self) -> HomeScreen {
         HomeScreen::new(
-            self.service_container.collection.clone(),
-            self.service_container.cover_art.clone(),
+            self.core.collection().clone(),
+            self.core.cover_art().clone(),
             self.picker.clone(),
         )
     }
@@ -235,8 +184,8 @@ impl App {
                     self.queue_view = match self.queue_view {
                         Some(_) => None,
                         None => Some(QueueView::new(
-                            self.service_container
-                                .playback
+                            self.core
+                                .playback()
                                 .queue()
                                 .current()
                                 .map(|(index, _)| index),
@@ -284,7 +233,7 @@ impl App {
 
         if let Some(queue_view) = &mut self.queue_view {
             if let Some(key) = event.as_key_press_event() {
-                let len = self.service_container.playback.queue().entries().len();
+                let len = self.core.playback().queue().entries().len();
                 match queue_view.handle_key(key.code, len) {
                     Some(QueueViewAction::Close) => self.queue_view = None,
                     Some(QueueViewAction::Clear) => {
@@ -304,7 +253,7 @@ impl App {
             match action {
                 Action::Login(login_action) => {
                     self.overlay = Some(AppOverlay::loading(None));
-                    self.service_container.login.handle_action(login_action)
+                    self.core.handle_login_action(login_action)
                 }
                 Action::SwitchScreen(new_screen) => self.active_screen = new_screen,
                 Action::PlayQueue { entries, start } => {

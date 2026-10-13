@@ -1,7 +1,7 @@
 use crate::data::app_data_dir;
 use crate::database::core::database::Database;
 use crate::database::cover_art::CoverArtRepository;
-use crate::domain::AppEvent;
+use crate::domain::CoreEvent;
 use crate::open_subsonic::OpenSubsonicClient;
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -38,7 +38,7 @@ pub enum CoverArtEvent {
 pub struct CoverArtService {
     database: Database,
     client: OpenSubsonicClient,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: UnboundedSender<CoreEvent>,
     cache_dir: PathBuf,
     /// Keyed by cache path, i.e. by cover rather than album, so a cover
     /// changed by a sync isn't shadowed by the old one.
@@ -51,7 +51,7 @@ impl CoverArtService {
     pub fn new(
         database: Database,
         client: OpenSubsonicClient,
-        event_tx: UnboundedSender<AppEvent>,
+        event_tx: UnboundedSender<CoreEvent>,
     ) -> Result<Self> {
         let cache_dir = app_data_dir().join("cache").join("covers");
         std::fs::create_dir_all(&cache_dir).context("failed to create cover cache directory")?;
@@ -130,7 +130,7 @@ impl CoverArtService {
     fn send_loaded(&self, album_id: i64, result: Result<Option<Arc<DynamicImage>>, String>) {
         let _ = self
             .event_tx
-            .send(AppEvent::CoverArt(CoverArtEvent::Loaded {
+            .send(CoreEvent::CoverArt(CoverArtEvent::Loaded {
                 album_id,
                 result,
             }));

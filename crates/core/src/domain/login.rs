@@ -1,6 +1,6 @@
 use crate::database::client_config::ClientConfigRepository;
 use crate::database::core::database::Database;
-use crate::domain::AppEvent;
+use crate::domain::CoreEvent;
 use crate::open_subsonic::{OpenSubsonicClient, OpenSubsonicOptions, PingResponse};
 use color_eyre::Result;
 use tokio::sync::mpsc::UnboundedSender;
@@ -26,11 +26,11 @@ pub struct LoginResult {
 
 pub struct LoginService {
     database: Database,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: UnboundedSender<CoreEvent>,
 }
 
 impl LoginService {
-    pub fn new(database: Database, event_tx: UnboundedSender<AppEvent>) -> Self {
+    pub fn new(database: Database, event_tx: UnboundedSender<CoreEvent>) -> Self {
         Self { database, event_tx }
     }
 
@@ -73,7 +73,7 @@ impl LoginService {
                 Err(err) => Err(err.into()),
             };
 
-            tx.send(AppEvent::Login(LoginEvent::LoginResult(to_send)))
+            tx.send(CoreEvent::Login(LoginEvent::LoginResult(to_send)))
         });
     }
 }

@@ -1,9 +1,9 @@
-use crate::domain::player::PlayingSongDetails;
 use crate::theme::{Theme, get_app_theme};
 use crate::ui::common::{PLAYING_ALBUM_BAR, format_duration};
 use crate::ui::keybinding::{format_keybinding, format_keybinding_hints};
 use crate::ui::overlay::dim_area;
 use crossterm::event::KeyCode;
+use hipp_core::domain::player::PlayingSongDetails;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::Stylize;

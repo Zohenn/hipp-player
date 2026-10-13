@@ -1,14 +1,14 @@
-use crate::domain::AppEvent;
-use crate::domain::collection::{CollectionService, CollectionState, CollectionSyncState};
-use crate::domain::cover_art::{CoverArtEvent, CoverArtService};
-use crate::domain::player::PlayingSongDetails;
-use crate::domain::song::Song;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::{Theme, get_app_theme};
 use crate::ui::common::{PLAYING_ALBUM_BAR, clamp_selection, format_duration};
 use crate::ui::keybinding::{format_keybinding, format_keybinding_hints};
 use chrono::Local;
 use crossterm::event::{Event, KeyCode};
+use hipp_core::domain::CoreEvent;
+use hipp_core::domain::collection::{CollectionService, CollectionState, CollectionSyncState};
+use hipp_core::domain::cover_art::{CoverArtEvent, CoverArtService};
+use hipp_core::domain::player::PlayingSongDetails;
+use hipp_core::domain::song::Song;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Margin, Rect};
 use ratatui::prelude::Layout;
@@ -130,9 +130,9 @@ impl Screen for HomeScreen {
         None
     }
 
-    fn handle_async_event(&mut self, event: &AppEvent) {
+    fn handle_async_event(&mut self, event: &CoreEvent) {
         // The user may have moved on to another album while this one loaded.
-        if let AppEvent::CoverArt(CoverArtEvent::Loaded { album_id, result }) = event
+        if let CoreEvent::CoverArt(CoverArtEvent::Loaded { album_id, result }) = event
             && let Some(open_album) = &mut self.open_album
             && open_album.album_id == *album_id
         {

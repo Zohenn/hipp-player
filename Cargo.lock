@@ -1432,29 +1432,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hipp-player"
+name = "hipp-core"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
- "arc-swap",
  "bytes",
  "chrono",
  "color-eyre",
- "crossterm",
  "dirs",
  "hex",
  "image",
  "keyring",
- "log",
  "lru",
  "md5",
  "mpris-server",
- "once_cell",
  "r2d2",
  "r2d2_sqlite",
  "rand 0.10.2",
- "ratatui",
- "ratatui-image",
  "reqwest",
  "rodio",
  "rusqlite",
@@ -1463,9 +1457,25 @@ dependencies = [
  "serde_rusqlite",
  "tokio",
  "tokio-stream",
+ "webp",
+]
+
+[[package]]
+name = "hipp-player"
+version = "0.2.0"
+dependencies = [
+ "arc-swap",
+ "chrono",
+ "color-eyre",
+ "crossterm",
+ "hipp-core",
+ "once_cell",
+ "ratatui",
+ "ratatui-image",
+ "tokio",
+ "tokio-stream",
  "tui-input",
  "unicode-width",
- "webp",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
-use crate::domain::AppEvent;
-use crate::domain::login::{LoginAction, LoginParams};
-use crate::domain::player::PlayingSongDetails;
 use crate::screens::screen::{Action, Screen};
 use crate::theme::get_app_theme;
 use crate::ui::control::{Control, ControlState};
 use crossterm::event::{Event, KeyCode};
+use hipp_core::domain::CoreEvent;
+use hipp_core::domain::login::{LoginAction, LoginParams};
+use hipp_core::domain::player::PlayingSongDetails;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Style;
@@ -84,7 +84,7 @@ impl Screen for LoginScreen {
         None
     }
 
-    fn handle_async_event(&mut self, _event: &AppEvent) {}
+    fn handle_async_event(&mut self, _event: &CoreEvent) {}
 
     fn render(
         &mut self,

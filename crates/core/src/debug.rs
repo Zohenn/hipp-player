@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! dbg_file {
     ($val:expr) => {
-        $crate::dbg_file!("/tmp/hipp-player-debug.txt", $val)
+        $crate::dbg_file!(::std::env::temp_dir().join("hipp-player-debug.txt"), $val)
     };
     ($file_path:expr, $val:expr) => {
         if let ::std::result::Result::Ok(mut file) = ::std::fs::OpenOptions::new()

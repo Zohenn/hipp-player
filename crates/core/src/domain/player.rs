@@ -1,7 +1,7 @@
 use crate::data::log_error;
 use crate::database::core::database::Database;
 use crate::database::song::SongRepository;
-use crate::domain::AppEvent;
+use crate::domain::CoreEvent;
 use crate::domain::album::Album;
 use crate::domain::open_subsonic_streaming::OpenSubsonicStreamingService;
 use crate::domain::song::Song;
@@ -16,11 +16,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-#[derive(Clone)]
 pub struct PlayerService {
     database: Database,
     open_subsonic_streaming_service: OpenSubsonicStreamingService,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: UnboundedSender<CoreEvent>,
     sink: Arc<Mutex<Option<(MixerDeviceSink, Player)>>>,
     current_request: u64,
     // Request whose file is currently in the sink; differs from
@@ -86,7 +85,7 @@ impl PlayerService {
     pub fn new(
         database: Database,
         open_subsonic_streaming_service: OpenSubsonicStreamingService,
-        event_tx: UnboundedSender<AppEvent>,
+        event_tx: UnboundedSender<CoreEvent>,
     ) -> Self {
         Self {
             database,
@@ -162,11 +161,11 @@ impl PlayerService {
 
         tokio::spawn(async move {
             let send_result = match streaming_service.stream_song(&subsonic_id).await {
-                Ok(file) => event_tx.send(AppEvent::Player(PlayerEvent::FileReady {
+                Ok(file) => event_tx.send(CoreEvent::Player(PlayerEvent::FileReady {
                     request_id,
                     file,
                 })),
-                Err(err) => event_tx.send(AppEvent::Player(PlayerEvent::StreamFailed {
+                Err(err) => event_tx.send(CoreEvent::Player(PlayerEvent::StreamFailed {
                     request_id,
                     error: format!("{:#}", err),
                 })),
@@ -192,7 +191,7 @@ impl PlayerService {
         player.append(rodio::decoder::Decoder::new(BufReader::new(file))?);
         let event_tx = self.event_tx.clone();
         player.append(EmptyCallback::new(Box::new(move || {
-            if let Err(err) = event_tx.send(AppEvent::Player(PlayerEvent::Finished { request_id }))
+            if let Err(err) = event_tx.send(CoreEvent::Player(PlayerEvent::Finished { request_id }))
             {
                 log_error(err);
             }

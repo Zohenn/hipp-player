@@ -1,6 +1,6 @@
-use crate::domain::AppEvent;
-use crate::domain::player::PlayingSongDetails;
 use crate::screens::screen::{Action, Screen};
+use hipp_core::domain::CoreEvent;
+use hipp_core::domain::player::PlayingSongDetails;
 use ratatui::Frame;
 use ratatui::crossterm::event::Event;
 use ratatui::layout::Rect;
@@ -12,7 +12,7 @@ impl Screen for InitScreen {
         None
     }
 
-    fn handle_async_event(&mut self, _event: &AppEvent) {}
+    fn handle_async_event(&mut self, _event: &CoreEvent) {}
 
     fn render(
         &mut self,
